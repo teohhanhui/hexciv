@@ -3,15 +3,53 @@ resolver = "2"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.0.0"
+version = "0.1.0"
 authors = ["Teoh Han Hui <teohhanhui@gmail.com>"]
 edition = "2021"
 rust-version = "1.80.0"
-description = "WIP"
+description = "Civ VI inspired game"
 repository = "https://github.com/teohhanhui/hexciv"
 license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
+bevy = { version = "0.14.1", default-features = false }
+bevy_ecs_tilemap = { version = "0.14.0", default-features = false }
+log = { version = "0.4.22", default-features = false }
+tracing = { version = "0.1.40", default-features = false }
+woodpecker_ui = { git = "https://github.com/StarArawn/woodpecker_ui", default-features = false }
+
+[patch.crates-io]
+bevy_ecs_tilemap = { git = "https://github.com/teohhanhui/bevy_ecs_tilemap", branch = "workaround/wgpu-gles-texture-type-inference" }
+bevy_eventlistener = { git = "https://github.com/StarArawn/bevy_eventlistener", branch = "main" }
+bevy_mod_picking = { git = "https://github.com/StarArawn/bevy_mod_picking", branch = "main" }
+bevy_vello = { git = "https://github.com/linebender/bevy_vello", rev = "7fe648ccb9766ecf2ef469f08c9f21093c3544e6" }
+
+# Enable a small amount of optimization in the dev profile.
+[profile.dev]
+opt-level = 1
+
+# Enable a large amount of optimization in the dev profile for dependencies.
+[profile.dev.package."*"]
+opt-level = 3
+
+# Enable more optimization in the release profile at the cost of compile time.
+[profile.release]
+# Do a second optimization pass over the entire program, including dependencies.
+# Slows compile times, marginal improvements.
+lto = "thin"
+# Compile the entire crate as one unit.
+# Slows compile times, marginal improvements.
+codegen-units = 1
+
+# Optimize for size in the wasm-release profile to reduce load times and bandwidth usage on web.
+[profile.wasm-release]
+# Default to release profile values.
+inherits = "release"
+# Optimize with size in mind (also try "z", sometimes it is better).
+# Slightly slows compile times, great improvements to file size and runtime performance.
+opt-level = "s"
+# Strip all debugging information from the binary to slightly reduce file size.
+strip = "debuginfo"
 
 [workspace.lints.clippy]
 arithmetic_side_effects = "warn"

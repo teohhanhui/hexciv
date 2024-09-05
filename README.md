@@ -1,6 +1,10 @@
 # Hexciv
 
-WIP
+[Civ VI] inspired game, written in [Rust] using the [Bevy] game engine.
+
+[Bevy]: https://bevyengine.org/
+[Civ VI]: https://civilization.fandom.com/wiki/Civilization_VI
+[Rust]: https://www.rust-lang.org/
 
 ## License
 
