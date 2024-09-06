@@ -15,6 +15,7 @@ license = "MIT OR Apache-2.0"
 bevy = { version = "0.14.1", default-features = false }
 bevy_ecs_tilemap = { version = "0.14.0", default-features = false }
 bevy_pancam = { version = "0.14.0", default-features = false }
+fastrand = { version = "2.1.1", default-features = false }
 log = { version = "0.4.22", default-features = false }
 tracing = { version = "0.1.40", default-features = false }
 woodpecker_ui = { git = "https://github.com/StarArawn/woodpecker_ui", default-features = false }

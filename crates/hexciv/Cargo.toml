@@ -13,6 +13,7 @@ default-run = "hexciv"
 bevy = { workspace = true, features = ["bevy_asset", "bevy_color", "bevy_core_pipeline", "bevy_gizmos", "bevy_render", "bevy_scene", "bevy_state", "bevy_winit", "multi_threaded", "png", "sysinfo_plugin", "wayland", "webgl2", "x11"] }
 bevy_ecs_tilemap = { workspace = true, features = ["render"] }
 bevy_pancam = { workspace = true, features = [] }
+fastrand = { workspace = true, features = ["js", "std"] }
 log = { workspace = true, features = ["max_level_debug", "release_max_level_warn"] }
 tracing = { workspace = true, features = ["max_level_debug", "release_max_level_warn"] }
 woodpecker_ui = { workspace = true, features = [], optional = true }

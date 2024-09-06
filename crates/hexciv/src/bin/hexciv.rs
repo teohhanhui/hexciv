@@ -10,9 +10,6 @@ const TILE_SIZE_HEX_ROW: TilemapTileSize = TilemapTileSize { x: 100.0, y: 115.0 
 const GRID_SIZE_HEX_ROW: TilemapGridSize = TilemapGridSize { x: 100.0, y: 115.0 };
 
 #[derive(Deref, Resource)]
-struct TileHandleHexRow(Handle<Image>);
-
-#[derive(Deref, Resource)]
 struct FontHandle(Handle<Font>);
 
 #[derive(Resource)]
@@ -26,13 +23,6 @@ struct HighlightedLabel;
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, SystemSet)]
 struct SpawnTilemapSet;
-
-impl FromWorld for TileHandleHexRow {
-    fn from_world(world: &mut World) -> Self {
-        let asset_server = world.resource::<AssetServer>();
-        Self(asset_server.load("tile-hex-row.png"))
-    }
-}
 
 impl FromWorld for FontHandle {
     fn from_world(world: &mut World) -> Self {
@@ -64,9 +54,8 @@ fn main() {
         )
         .add_plugins(PanCamPlugin)
         .add_plugins(TilemapPlugin)
-        .init_resource::<CursorPos>()
-        .init_resource::<TileHandleHexRow>()
         .init_resource::<FontHandle>()
+        .init_resource::<CursorPos>()
         .add_systems(
             Startup,
             (spawn_tilemap, apply_deferred)
@@ -79,13 +68,25 @@ fn main() {
 }
 
 /// Generates the initial tilemap.
-fn spawn_tilemap(mut commands: Commands, tile_handle_hex_row: Res<TileHandleHexRow>) {
+fn spawn_tilemap(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.spawn(Camera2dBundle::default()).insert(PanCam {
         grab_buttons: vec![MouseButton::Left],
         min_scale: 1.0,
         max_scale: 10.0,
         ..Default::default()
     });
+
+    let image_handles = vec![
+        asset_server.load("tiles/plains.png"),
+        asset_server.load("tiles/grassland.png"),
+        asset_server.load("tiles/desert.png"),
+        asset_server.load("tiles/tundra.png"),
+        asset_server.load("tiles/snow.png"),
+        asset_server.load("tiles/mountains.png"),
+        asset_server.load("tiles/coast.png"),
+        asset_server.load("tiles/ocean.png"),
+    ];
+    let texture_vec = TilemapTexture::Vector(image_handles);
 
     let map_size = TilemapSize {
         x: MAP_SIDE_LENGTH_X,
@@ -96,13 +97,33 @@ fn spawn_tilemap(mut commands: Commands, tile_handle_hex_row: Res<TileHandleHexR
     let tilemap_entity = commands.spawn_empty().id();
     let tilemap_id = TilemapId(tilemap_entity);
 
-    fill_tilemap(
+    let mut rng = fastrand::Rng::new();
+    let tile_choices = [
         TileTextureIndex(0),
-        map_size,
-        tilemap_id,
-        &mut commands,
-        &mut tile_storage,
-    );
+        TileTextureIndex(1),
+        TileTextureIndex(2),
+        TileTextureIndex(3),
+        TileTextureIndex(4),
+        TileTextureIndex(5),
+        TileTextureIndex(6),
+        TileTextureIndex(7),
+    ];
+    commands.entity(tilemap_id.0).with_children(|parent| {
+        for x in 0..map_size.x {
+            for y in 0..map_size.y {
+                let tile_pos = TilePos { x, y };
+                let tile_entity = parent
+                    .spawn(TileBundle {
+                        position: tile_pos,
+                        tilemap_id,
+                        texture_index: rng.choice(tile_choices).unwrap(),
+                        ..Default::default()
+                    })
+                    .id();
+                tile_storage.set(&tile_pos, tile_entity);
+            }
+        }
+    });
 
     let tile_size = TILE_SIZE_HEX_ROW;
     let grid_size = GRID_SIZE_HEX_ROW;
@@ -112,7 +133,7 @@ fn spawn_tilemap(mut commands: Commands, tile_handle_hex_row: Res<TileHandleHexR
         grid_size,
         size: map_size,
         storage: tile_storage,
-        texture: TilemapTexture::Single(tile_handle_hex_row.clone()),
+        texture: texture_vec,
         tile_size,
         map_type,
         transform: get_tilemap_center_transform(&map_size, &grid_size, &map_type, 0.0),
