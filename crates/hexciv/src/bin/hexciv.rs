@@ -1,10 +1,10 @@
 use bevy::color::palettes;
 use bevy::prelude::*;
 use bevy_ecs_tilemap::prelude::*;
-use hexciv::helpers::camera::movement as camera_movement;
+use bevy_pancam::{PanCam, PanCamPlugin};
 
-const MAP_SIDE_LENGTH_X: u32 = 4;
-const MAP_SIDE_LENGTH_Y: u32 = 4;
+const MAP_SIDE_LENGTH_X: u32 = 74;
+const MAP_SIDE_LENGTH_Y: u32 = 46;
 
 const TILE_SIZE_HEX_ROW: TilemapTileSize = TilemapTileSize { x: 100.0, y: 115.0 };
 const GRID_SIZE_HEX_ROW: TilemapGridSize = TilemapGridSize { x: 100.0, y: 115.0 };
@@ -62,10 +62,11 @@ fn main() {
                 })
                 .set(ImagePlugin::default_nearest()),
         )
+        .add_plugins(PanCamPlugin)
+        .add_plugins(TilemapPlugin)
         .init_resource::<CursorPos>()
         .init_resource::<TileHandleHexRow>()
         .init_resource::<FontHandle>()
-        .add_plugins(TilemapPlugin)
         .add_systems(
             Startup,
             (spawn_tilemap, apply_deferred)
@@ -73,14 +74,18 @@ fn main() {
                 .in_set(SpawnTilemapSet),
         )
         .add_systems(Startup, spawn_tile_labels.after(SpawnTilemapSet))
-        .add_systems(First, (camera_movement, update_cursor_pos).chain())
-        .add_systems(Update, highlight_tile_labels)
+        .add_systems(Update, (update_cursor_pos, highlight_tile_labels).chain())
         .run();
 }
 
 /// Generates the initial tilemap.
 fn spawn_tilemap(mut commands: Commands, tile_handle_hex_row: Res<TileHandleHexRow>) {
-    commands.spawn(Camera2dBundle::default());
+    commands.spawn(Camera2dBundle::default()).insert(PanCam {
+        grab_buttons: vec![MouseButton::Left],
+        min_scale: 1.0,
+        max_scale: 10.0,
+        ..Default::default()
+    });
 
     let map_size = TilemapSize {
         x: MAP_SIDE_LENGTH_X,

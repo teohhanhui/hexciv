@@ -6,6 +6,16 @@
 [Civ VI]: https://civilization.fandom.com/wiki/Civilization_VI
 [Rust]: https://www.rust-lang.org/
 
+## Run in browser
+
+**Prerequisite**: Install and setup [wasm-server-runner].
+
+```
+cargo run --target wasm32-unknown-unknown
+```
+
+[wasm-server-runner]: https://github.com/jakobhellermann/wasm-server-runner
+
 ## License
 
 Licensed under either of

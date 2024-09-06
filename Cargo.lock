@@ -986,6 +986,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bevy_pancam"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09e37f419c99f5e96e8bf34084af33f778facdd6a404c535349a4fd56762ad29"
+dependencies = [
+ "bevy",
+]
+
+[[package]]
 name = "bevy_pbr"
 version = "0.14.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2723,6 +2732,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "bevy_ecs_tilemap",
+ "bevy_pancam",
  "log",
  "tracing",
  "woodpecker_ui",
