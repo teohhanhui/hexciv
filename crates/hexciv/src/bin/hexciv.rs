@@ -2,6 +2,7 @@ use bevy::color::palettes;
 use bevy::prelude::*;
 use bevy_ecs_tilemap::prelude::*;
 use bevy_pancam::{PanCam, PanCamPlugin};
+use fastlem_random_terrain::generate_terrain;
 
 const MAP_SIDE_LENGTH_X: u32 = 74;
 const MAP_SIDE_LENGTH_Y: u32 = 46;
@@ -93,30 +94,105 @@ fn spawn_tilemap(mut commands: Commands, asset_server: Res<AssetServer>) {
         y: MAP_SIDE_LENGTH_Y,
     };
 
+    let bound_min = fastlem_random_terrain::Site2D {
+        x: -f64::from(map_size.x) / 2.0,
+        y: -f64::from(map_size.y) / 2.0,
+    };
+    let bound_max = fastlem_random_terrain::Site2D {
+        x: f64::from(map_size.x) / 2.0,
+        y: f64::from(map_size.y) / 2.0,
+    };
+    let bound_range = fastlem_random_terrain::Site2D {
+        x: f64::from(map_size.x),
+        y: f64::from(map_size.y),
+    };
+
+    let mut rng = fastrand::Rng::new();
+    let seed = rng.u32(..);
+    info!(seed, "random terrain seed");
+    rng.seed(u64::from(seed));
+
+    let terrain = {
+        let config = fastlem_random_terrain::Config {
+            seed,
+            ..Default::default()
+        };
+        generate_terrain(&config, bound_min, bound_max, bound_range)
+    };
+
     let mut tile_storage = TileStorage::empty(map_size);
     let tilemap_entity = commands.spawn_empty().id();
     let tilemap_id = TilemapId(tilemap_entity);
 
-    let mut rng = fastrand::Rng::new();
-    let tile_choices = [
+    let frigid_zone_tile_choices = vec![TileTextureIndex(3), TileTextureIndex(4)];
+    let temperate_zone_tile_choices = vec![
+        TileTextureIndex(0),
+        TileTextureIndex(0),
         TileTextureIndex(0),
         TileTextureIndex(1),
+    ];
+    let subtropics_tile_choices = vec![
+        TileTextureIndex(0),
+        TileTextureIndex(0),
+        TileTextureIndex(0),
+        TileTextureIndex(1),
+        TileTextureIndex(1),
         TileTextureIndex(2),
-        TileTextureIndex(3),
-        TileTextureIndex(4),
-        TileTextureIndex(5),
-        TileTextureIndex(6),
-        TileTextureIndex(7),
+        TileTextureIndex(2),
+    ];
+    let tropics_tile_choices = vec![
+        TileTextureIndex(0),
+        TileTextureIndex(0),
+        TileTextureIndex(1),
+        TileTextureIndex(1),
+        TileTextureIndex(1),
+        TileTextureIndex(1),
+        TileTextureIndex(2),
     ];
     commands.entity(tilemap_id.0).with_children(|parent| {
         for x in 0..map_size.x {
             for y in 0..map_size.y {
                 let tile_pos = TilePos { x, y };
+                let elevation = {
+                    let x = bound_min.x
+                        + bound_range.x
+                            * ((f64::from(tile_pos.x) + 0.5) / (f64::from(map_size.x) + 1.0));
+                    let y = bound_min.y
+                        + bound_range.y
+                            * ((f64::from(tile_pos.y) + 0.5) / (f64::from(map_size.y) + 1.0));
+                    let site = fastlem_random_terrain::Site2D { x, y };
+                    terrain.get_elevation(&site).unwrap()
+                };
+                let texture_index = if elevation < 0.05 {
+                    // ocean
+                    TileTextureIndex(7)
+                } else if (0.05..0.125).contains(&elevation) {
+                    // coast
+                    TileTextureIndex(6)
+                // } else if elevation >= 25.0 {
+                // TODO: hills
+                } else if elevation >= 40.0 {
+                    // mountains
+                    TileTextureIndex(5)
+                } else {
+                    let latitude = -90.0
+                        + 180.0 * ((f64::from(tile_pos.y) + 0.5) / (f64::from(map_size.y) + 1.0));
+                    *rng.choice(if latitude >= 66.57 || latitude <= -66.57 {
+                        &frigid_zone_tile_choices
+                    } else if latitude >= 35.0 || latitude <= -35.0 {
+                        &temperate_zone_tile_choices
+                    } else if latitude >= 23.43 || latitude <= -23.43 {
+                        &subtropics_tile_choices
+                    } else {
+                        &tropics_tile_choices
+                    })
+                    .unwrap()
+                };
                 let tile_entity = parent
                     .spawn(TileBundle {
                         position: tile_pos,
                         tilemap_id,
-                        texture_index: rng.choice(tile_choices).unwrap(),
+                        texture_index,
                         ..Default::default()
                     })
                     .id();

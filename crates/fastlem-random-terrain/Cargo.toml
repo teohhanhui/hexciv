@@ -1,0 +1,14 @@
+[package]
+name = "fastlem-random-terrain"
+version = "0.1.0"
+authors = ["Teruki TADA <tadateruki.public@gmail.com>"]
+edition = { workspace = true }
+rust-version = { workspace = true }
+description = "A simple random terrain generator using fastlem"
+license = "MPL-2.0"
+
+[dependencies]
+fastlem = { workspace = true, features = [] }
+log = { workspace = true, features = [] }
+noise = { workspace = true, features = [] }
+terrain-graph = { workspace = true, features = [] }
