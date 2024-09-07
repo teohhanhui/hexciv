@@ -3,6 +3,7 @@ use bevy::prelude::*;
 use bevy_ecs_tilemap::prelude::*;
 use bevy_pancam::{PanCam, PanCamPlugin};
 use fastlem_random_terrain::generate_terrain;
+use fastrand_contrib::RngExt as _;
 
 const MAP_SIDE_LENGTH_X: u32 = 74;
 const MAP_SIDE_LENGTH_Y: u32 = 46;
@@ -83,40 +84,72 @@ fn spawn_tilemap(mut commands: Commands, asset_server: Res<AssetServer>) {
         asset_server.load("tiles/desert.png"),
         asset_server.load("tiles/tundra.png"),
         asset_server.load("tiles/snow.png"),
-        asset_server.load("tiles/mountains.png"),
+        asset_server.load("tiles/plains-hills.png"),
+        asset_server.load("tiles/grassland-hills.png"),
+        asset_server.load("tiles/desert-hills.png"),
+        asset_server.load("tiles/tundra-hills.png"),
+        asset_server.load("tiles/snow-hills.png"),
+        asset_server.load("tiles/plains-mountains.png"),
+        asset_server.load("tiles/grassland-mountains.png"),
+        asset_server.load("tiles/desert-mountains.png"),
+        asset_server.load("tiles/tundra-mountains.png"),
+        asset_server.load("tiles/snow-mountains.png"),
         asset_server.load("tiles/coast.png"),
         asset_server.load("tiles/ocean.png"),
     ];
     let texture_vec = TilemapTexture::Vector(image_handles);
+
+    #[derive(Copy, Clone)]
+    #[repr(u32)]
+    enum BaseTerrain {
+        Plains = 0,
+        Grassland = 1,
+        Desert = 2,
+        Tundra = 3,
+        Snow = 4,
+        Coast = 15,
+        Ocean = 16,
+    }
+
+    #[derive(Copy, Clone)]
+    #[repr(u32)]
+    enum BaseTerrainVariant {
+        Hills = 5,
+        Mountains = 10,
+    }
 
     let map_size = TilemapSize {
         x: MAP_SIDE_LENGTH_X,
         y: MAP_SIDE_LENGTH_Y,
     };
 
+    const BOUND_WIDTH: f64 = 100.0;
+    const BOUND_HEIGHT: f64 = 100.0;
+
     let bound_min = fastlem_random_terrain::Site2D {
-        x: -f64::from(map_size.x) / 2.0,
-        y: -f64::from(map_size.y) / 2.0,
+        x: -BOUND_WIDTH / 2.0,
+        y: -BOUND_HEIGHT / 2.0,
     };
     let bound_max = fastlem_random_terrain::Site2D {
-        x: f64::from(map_size.x) / 2.0,
-        y: f64::from(map_size.y) / 2.0,
+        x: BOUND_WIDTH / 2.0,
+        y: BOUND_HEIGHT / 2.0,
     };
     let bound_range = fastlem_random_terrain::Site2D {
-        x: f64::from(map_size.x),
-        y: f64::from(map_size.y),
+        x: BOUND_WIDTH,
+        y: BOUND_HEIGHT,
     };
 
     let mut rng = fastrand::Rng::new();
-    let seed = rng.u32(..);
-    info!(seed, "random terrain seed");
-    rng.seed(u64::from(seed));
+    let seed = rng.get_seed();
+    info!(seed, "map seed");
 
     let terrain = {
         let config = fastlem_random_terrain::Config {
-            seed,
+            seed: rng.u32(..),
+            land_ratio: rng.f64_range(0.29..=0.6),
             ..Default::default()
         };
+        info!(?config, "fastlem-random-terrain config");
         generate_terrain(&config, bound_min, bound_max, bound_range)
     };
 
@@ -124,60 +157,54 @@ fn spawn_tilemap(mut commands: Commands, asset_server: Res<AssetServer>) {
     let tilemap_entity = commands.spawn_empty().id();
     let tilemap_id = TilemapId(tilemap_entity);
 
-    let frigid_zone_tile_choices = vec![TileTextureIndex(3), TileTextureIndex(4)];
+    let frigid_zone_tile_choices = vec![BaseTerrain::Tundra, BaseTerrain::Snow];
     let temperate_zone_tile_choices = vec![
-        TileTextureIndex(0),
-        TileTextureIndex(0),
-        TileTextureIndex(0),
-        TileTextureIndex(1),
+        BaseTerrain::Plains,
+        BaseTerrain::Plains,
+        BaseTerrain::Plains,
+        BaseTerrain::Grassland,
     ];
     let subtropics_tile_choices = vec![
-        TileTextureIndex(0),
-        TileTextureIndex(0),
-        TileTextureIndex(0),
-        TileTextureIndex(1),
-        TileTextureIndex(1),
-        TileTextureIndex(2),
-        TileTextureIndex(2),
+        BaseTerrain::Plains,
+        BaseTerrain::Plains,
+        BaseTerrain::Plains,
+        BaseTerrain::Grassland,
+        BaseTerrain::Grassland,
+        BaseTerrain::Desert,
+        BaseTerrain::Desert,
     ];
     let tropics_tile_choices = vec![
-        TileTextureIndex(0),
-        TileTextureIndex(0),
-        TileTextureIndex(1),
-        TileTextureIndex(1),
-        TileTextureIndex(1),
-        TileTextureIndex(1),
-        TileTextureIndex(2),
+        BaseTerrain::Plains,
+        BaseTerrain::Plains,
+        BaseTerrain::Grassland,
+        BaseTerrain::Grassland,
+        BaseTerrain::Grassland,
+        BaseTerrain::Grassland,
+        BaseTerrain::Desert,
     ];
-    commands.entity(tilemap_id.0).with_children(|parent| {
-        for x in 0..map_size.x {
-            for y in 0..map_size.y {
-                let tile_pos = TilePos { x, y };
-                let elevation = {
-                    let x = bound_min.x
-                        + bound_range.x
-                            * ((f64::from(tile_pos.x) + 0.5) / (f64::from(map_size.x) + 1.0));
-                    let y = bound_min.y
-                        + bound_range.y
-                            * ((f64::from(tile_pos.y) + 0.5) / (f64::from(map_size.y) + 1.0));
-                    let site = fastlem_random_terrain::Site2D { x, y };
-                    terrain.get_elevation(&site).unwrap()
-                };
-                let texture_index = if elevation < 0.05 {
-                    // ocean
-                    TileTextureIndex(7)
-                } else if (0.05..0.125).contains(&elevation) {
-                    // coast
-                    TileTextureIndex(6)
-                // } else if elevation >= 25.0 {
-                // TODO: hills
-                } else if elevation >= 40.0 {
-                    // mountains
-                    TileTextureIndex(5)
-                } else {
-                    let latitude = -90.0
-                        + 180.0 * ((f64::from(tile_pos.y) + 0.5) / (f64::from(map_size.y) + 1.0));
-                    *rng.choice(if latitude >= 66.57 || latitude <= -66.57 {
+
+    for x in 0..map_size.x {
+        for y in 0..map_size.y {
+            let tile_pos = TilePos { x, y };
+            let elevation = {
+                let x = bound_min.x
+                    + bound_range.x * ((f64::from(tile_pos.x) + 0.5) / f64::from(map_size.x));
+                let y = bound_min.y
+                    + bound_range.y
+                        * ((f64::from(map_size.y - tile_pos.y - 1) + 0.5) / f64::from(map_size.y));
+                let site = fastlem_random_terrain::Site2D { x, y };
+                terrain.get_elevation(&site).unwrap()
+            };
+            let texture_index = if elevation < 0.05 {
+                TileTextureIndex(BaseTerrain::Ocean as u32)
+            } else if (0.05..0.125).contains(&elevation) {
+                TileTextureIndex(BaseTerrain::Coast as u32)
+            } else {
+                let latitude =
+                    -90.0 + 180.0 * ((f64::from(tile_pos.y) + 0.5) / f64::from(map_size.y));
+
+                let choice = *rng
+                    .choice(if latitude >= 66.57 || latitude <= -66.57 {
                         &frigid_zone_tile_choices
                     } else if latitude >= 35.0 || latitude <= -35.0 {
                         &temperate_zone_tile_choices
@@ -186,20 +213,27 @@ fn spawn_tilemap(mut commands: Commands, asset_server: Res<AssetServer>) {
                     } else {
                         &tropics_tile_choices
                     })
-                    .unwrap()
-                };
-                let tile_entity = parent
-                    .spawn(TileBundle {
-                        position: tile_pos,
-                        tilemap_id,
-                        texture_index,
-                        ..Default::default()
-                    })
-                    .id();
-                tile_storage.set(&tile_pos, tile_entity);
-            }
+                    .unwrap();
+
+                TileTextureIndex(if elevation >= 25.0 {
+                    choice as u32 + BaseTerrainVariant::Mountains as u32
+                } else if elevation >= 0.5 {
+                    choice as u32 + BaseTerrainVariant::Hills as u32
+                } else {
+                    choice as u32
+                })
+            };
+            let tile_entity = commands
+                .spawn(TileBundle {
+                    position: tile_pos,
+                    tilemap_id,
+                    texture_index,
+                    ..Default::default()
+                })
+                .id();
+            tile_storage.set(&tile_pos, tile_entity);
         }
-    });
+    }
 
     let tile_size = TILE_SIZE_HEX_ROW;
     let grid_size = GRID_SIZE_HEX_ROW;
@@ -244,7 +278,7 @@ fn spawn_tile_labels(
                     )
                     .with_justify(text_justify),
                     transform,
-                    ..default()
+                    ..Default::default()
                 })
                 .id();
             commands

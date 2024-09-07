@@ -2298,6 +2298,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fastrand-contrib"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb6c045880cda8f657f4859baf534963ff0595e2dcce0de5f52dcdf3076c290b"
+dependencies = [
+ "fastrand",
+]
+
+[[package]]
 name = "fdeflate"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2808,6 +2817,7 @@ dependencies = [
  "bevy_pancam",
  "fastlem-random-terrain",
  "fastrand",
+ "fastrand-contrib",
  "log",
  "tracing",
  "woodpecker_ui",

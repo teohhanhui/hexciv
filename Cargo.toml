@@ -18,6 +18,7 @@ bevy_pancam = { version = "0.14.0", default-features = false }
 fastlem = { version = "0.1.4", default-features = false }
 fastlem-random-terrain = { path = "crates/fastlem-random-terrain", default-features = false }
 fastrand = { version = "2.1.1", default-features = false }
+fastrand-contrib = { version = "0.1.0", default-features = false }
 log = { version = "0.4.22", default-features = false }
 noise = { version = "0.9.0", default-features = false }
 terrain-graph = { version = "1.0.1", default-features = false }

@@ -15,6 +15,7 @@ bevy_ecs_tilemap = { workspace = true, features = ["render"] }
 bevy_pancam = { workspace = true, features = [] }
 fastlem-random-terrain = { workspace = true, features = [] }
 fastrand = { workspace = true, features = ["js", "std"] }
+fastrand-contrib = { workspace = true, features = ["std"] }
 log = { workspace = true, features = ["max_level_debug", "release_max_level_warn"] }
 tracing = { workspace = true, features = ["max_level_debug", "release_max_level_warn"] }
 woodpecker_ui = { workspace = true, features = [], optional = true }
