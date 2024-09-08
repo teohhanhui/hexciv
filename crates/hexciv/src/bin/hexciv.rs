@@ -240,7 +240,7 @@ fn spawn_tilemap(mut commands: Commands, asset_server: Res<AssetServer>) {
 
                 TileTextureIndex(if elevation >= 25.0 {
                     choice as u32 + BaseTerrainVariant::Mountains as u32
-                } else if elevation >= 0.5 {
+                } else if elevation >= 5.0 {
                     choice as u32 + BaseTerrainVariant::Hills as u32
                 } else {
                     choice as u32
