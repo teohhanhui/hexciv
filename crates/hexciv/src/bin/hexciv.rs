@@ -5,11 +5,23 @@ use bevy_pancam::{PanCam, PanCamPlugin};
 use fastlem_random_terrain::generate_terrain;
 use fastrand_contrib::RngExt as _;
 
+// IMPORTANT: The map's dimensions must both be even numbers, due to the
+// assumptions being made in our calculations.
 const MAP_SIDE_LENGTH_X: u32 = 74;
 const MAP_SIDE_LENGTH_Y: u32 = 46;
 
-const TILE_SIZE_HEX_ROW: TilemapTileSize = TilemapTileSize { x: 100.0, y: 115.0 };
-const GRID_SIZE_HEX_ROW: TilemapGridSize = TilemapGridSize { x: 100.0, y: 115.0 };
+// IMPORTANT: The tile's dimensions must follow the aspect ratio of a regular
+// hexagon.
+const TILE_SIZE: TilemapTileSize = TilemapTileSize { x: 100.0, y: 115.0 };
+const GRID_SIZE: TilemapGridSize = TilemapGridSize {
+    x: 100.0,
+    y: 115.47005,
+};
+
+const ODD_ROW_OFFSET: f64 = 0.5 * GRID_SIZE.x as f64;
+
+const TILE_CENTER_TO_CENTER_X: f64 = GRID_SIZE.x as f64;
+const TILE_CENTER_TO_CENTER_Y: f64 = 0.8660254 * GRID_SIZE.x as f64;
 
 #[derive(Deref, Resource)]
 struct FontHandle(Handle<Font>);
@@ -123,8 +135,12 @@ fn spawn_tilemap(mut commands: Commands, asset_server: Res<AssetServer>) {
         y: MAP_SIDE_LENGTH_Y,
     };
 
-    const BOUND_WIDTH: f64 = 100.0;
-    const BOUND_HEIGHT: f64 = 100.0;
+    const BOUND_WIDTH: f64 = ((MAP_SIDE_LENGTH_X - 1) as f64 * TILE_CENTER_TO_CENTER_X
+        + GRID_SIZE.x as f64
+        + ODD_ROW_OFFSET)
+        / 100.0;
+    const BOUND_HEIGHT: f64 =
+        ((MAP_SIDE_LENGTH_Y - 1) as f64 * TILE_CENTER_TO_CENTER_Y + GRID_SIZE.y as f64) / 100.0;
 
     let bound_min = fastlem_random_terrain::Site2D {
         x: -BOUND_WIDTH / 2.0,
@@ -188,10 +204,18 @@ fn spawn_tilemap(mut commands: Commands, asset_server: Res<AssetServer>) {
             let tile_pos = TilePos { x, y };
             let elevation = {
                 let x = bound_min.x
-                    + bound_range.x * ((f64::from(tile_pos.x) + 0.5) / f64::from(map_size.x));
+                    + (f64::from(GRID_SIZE.x) / 2.0
+                        + f64::from(tile_pos.x) * TILE_CENTER_TO_CENTER_X
+                        + if tile_pos.y % 2 == 0 {
+                            0.0
+                        } else {
+                            ODD_ROW_OFFSET
+                        })
+                        / 100.0;
                 let y = bound_min.y
-                    + bound_range.y
-                        * ((f64::from(map_size.y - tile_pos.y - 1) + 0.5) / f64::from(map_size.y));
+                    + (f64::from(GRID_SIZE.y) / 2.0
+                        + f64::from(map_size.y - tile_pos.y - 1) * TILE_CENTER_TO_CENTER_Y)
+                        / 100.0;
                 let site = fastlem_random_terrain::Site2D { x, y };
                 terrain.get_elevation(&site).unwrap()
             };
@@ -235,18 +259,16 @@ fn spawn_tilemap(mut commands: Commands, asset_server: Res<AssetServer>) {
         }
     }
 
-    let tile_size = TILE_SIZE_HEX_ROW;
-    let grid_size = GRID_SIZE_HEX_ROW;
     let map_type = TilemapType::Hexagon(HexCoordSystem::RowOdd);
 
     commands.entity(tilemap_entity).insert(TilemapBundle {
-        grid_size,
+        grid_size: GRID_SIZE,
         size: map_size,
         storage: tile_storage,
         texture: texture_vec,
-        tile_size,
+        tile_size: TILE_SIZE,
         map_type,
-        transform: get_tilemap_center_transform(&map_size, &grid_size, &map_type, 0.0),
+        transform: get_tilemap_center_transform(&map_size, &GRID_SIZE, &map_type, 0.0),
         ..Default::default()
     });
 }
