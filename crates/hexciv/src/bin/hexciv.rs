@@ -4,6 +4,7 @@ use bevy_ecs_tilemap::prelude::*;
 use bevy_pancam::{PanCam, PanCamPlugin};
 use fastlem_random_terrain::generate_terrain;
 use fastrand_contrib::RngExt as _;
+use helpers::hex_grid::neighbors::HexNeighbors;
 
 // IMPORTANT: The map's dimensions must both be even numbers, due to the
 // assumptions being made in our calculations.
@@ -22,6 +23,25 @@ const ODD_ROW_OFFSET: f64 = 0.5 * GRID_SIZE.x as f64;
 
 const TILE_CENTER_TO_CENTER_X: f64 = GRID_SIZE.x as f64;
 const TILE_CENTER_TO_CENTER_Y: f64 = 0.8660254 * GRID_SIZE.x as f64;
+
+#[derive(Copy, Clone, Eq, PartialEq)]
+#[repr(u32)]
+enum BaseTerrain {
+    Plains = 0,
+    Grassland = 1,
+    Desert = 2,
+    Tundra = 3,
+    Snow = 4,
+    Coast = 15,
+    Ocean = 16,
+}
+
+#[derive(Copy, Clone)]
+#[repr(u32)]
+enum BaseTerrainVariant {
+    Hills = 5,
+    Mountains = 10,
+}
 
 #[derive(Deref, Resource)]
 struct FontHandle(Handle<Font>);
@@ -72,7 +92,7 @@ fn main() {
         .init_resource::<CursorPos>()
         .add_systems(
             Startup,
-            (spawn_tilemap, apply_deferred)
+            (spawn_tilemap, post_spawn_tilemap)
                 .chain()
                 .in_set(SpawnTilemapSet),
         )
@@ -110,25 +130,6 @@ fn spawn_tilemap(mut commands: Commands, asset_server: Res<AssetServer>) {
         asset_server.load("tiles/ocean.png"),
     ];
     let texture_vec = TilemapTexture::Vector(image_handles);
-
-    #[derive(Copy, Clone)]
-    #[repr(u32)]
-    enum BaseTerrain {
-        Plains = 0,
-        Grassland = 1,
-        Desert = 2,
-        Tundra = 3,
-        Snow = 4,
-        Coast = 15,
-        Ocean = 16,
-    }
-
-    #[derive(Copy, Clone)]
-    #[repr(u32)]
-    enum BaseTerrainVariant {
-        Hills = 5,
-        Mountains = 10,
-    }
 
     let map_size = TilemapSize {
         x: MAP_SIDE_LENGTH_X,
@@ -221,8 +222,6 @@ fn spawn_tilemap(mut commands: Commands, asset_server: Res<AssetServer>) {
             };
             let texture_index = if elevation < 0.05 {
                 TileTextureIndex(BaseTerrain::Ocean as u32)
-            } else if (0.05..0.125).contains(&elevation) {
-                TileTextureIndex(BaseTerrain::Coast as u32)
             } else {
                 let latitude =
                     -90.0 + 180.0 * ((f64::from(tile_pos.y) + 0.5) / f64::from(map_size.y));
@@ -273,11 +272,40 @@ fn spawn_tilemap(mut commands: Commands, asset_server: Res<AssetServer>) {
     });
 }
 
+fn post_spawn_tilemap(
+    tilemap_query: Query<(&TilemapSize, &TileStorage)>,
+    mut tile_query: Query<&mut TileTextureIndex>,
+) {
+    for (map_size, tile_storage) in tilemap_query.iter() {
+        for x in 0..map_size.x {
+            for y in 0..map_size.y {
+                let tile_pos = TilePos { x, y };
+                let tile_entity = tile_storage.get(&tile_pos).unwrap();
+                let tile_texture = tile_query.get(tile_entity).unwrap();
+                if tile_texture.0 != BaseTerrain::Ocean as u32 {
+                    continue;
+                }
+                let neighbor_entities =
+                    HexNeighbors::get_neighboring_positions_row_odd(&tile_pos, map_size)
+                        .entities(tile_storage);
+                if neighbor_entities.iter().any(|neighbor_entity| {
+                    let tile_texture = tile_query.get(*neighbor_entity).unwrap();
+                    tile_texture.0 != BaseTerrain::Ocean as u32
+                        && tile_texture.0 != BaseTerrain::Coast as u32
+                }) {
+                    let mut tile_texture = tile_query.get_mut(tile_entity).unwrap();
+                    tile_texture.0 = BaseTerrain::Coast as u32;
+                }
+            }
+        }
+    }
+}
+
 /// Generates tile position labels of the form: `(tile_pos.x, tile_pos.y)`
 fn spawn_tile_labels(
     mut commands: Commands,
-    tilemap_q: Query<(&Transform, &TilemapType, &TilemapGridSize, &TileStorage)>,
-    tile_q: Query<&mut TilePos>,
+    tilemap_query: Query<(&Transform, &TilemapType, &TilemapGridSize, &TileStorage)>,
+    tile_query: Query<&mut TilePos>,
     font_handle: Res<FontHandle>,
 ) {
     let text_style = TextStyle {
@@ -286,9 +314,9 @@ fn spawn_tile_labels(
         color: Color::BLACK,
     };
     let text_justify = JustifyText::Center;
-    for (map_transform, map_type, grid_size, tilemap_storage) in tilemap_q.iter() {
+    for (map_transform, map_type, grid_size, tilemap_storage) in tilemap_query.iter() {
         for tile_entity in tilemap_storage.iter().flatten() {
-            let tile_pos = tile_q.get(*tile_entity).unwrap();
+            let tile_pos = tile_query.get(*tile_entity).unwrap();
             let tile_center = tile_pos.center_in_world(grid_size, map_type).extend(1.0);
             let transform = *map_transform * Transform::from_translation(tile_center);
 
@@ -312,7 +340,7 @@ fn spawn_tile_labels(
 
 /// Keeps the cursor position updated based on any `CursorMoved` events.
 fn update_cursor_pos(
-    camera_q: Query<(&GlobalTransform, &Camera)>,
+    camera_query: Query<(&GlobalTransform, &Camera)>,
     mut cursor_moved_events: EventReader<CursorMoved>,
     mut cursor_pos: ResMut<CursorPos>,
 ) {
@@ -320,7 +348,7 @@ fn update_cursor_pos(
         // To get the mouse's world position, we have to transform its window position
         // by any transforms on the camera. This is done by projecting the
         // cursor position into camera space (world space).
-        for (cam_t, cam) in camera_q.iter() {
+        for (cam_t, cam) in camera_query.iter() {
             if let Some(pos) = cam.viewport_to_world_2d(cam_t, cursor_moved.position) {
                 *cursor_pos = CursorPos(pos);
             }
@@ -332,21 +360,21 @@ fn update_cursor_pos(
 fn highlight_tile_labels(
     mut commands: Commands,
     cursor_pos: Res<CursorPos>,
-    tilemap_q: Query<(
+    tilemap_query: Query<(
         &TilemapSize,
         &TilemapGridSize,
         &TilemapType,
         &TileStorage,
         &Transform,
     )>,
-    highlighted_tiles_q: Query<Entity, With<HighlightedLabel>>,
-    tile_label_q: Query<&TileLabel>,
-    mut text_q: Query<&mut Text>,
+    highlighted_tiles_query: Query<Entity, With<HighlightedLabel>>,
+    tile_label_query: Query<&TileLabel>,
+    mut text_query: Query<&mut Text>,
 ) {
     // Un-highlight any previously highlighted tile labels.
-    for highlighted_tile_entity in highlighted_tiles_q.iter() {
-        if let Ok(label) = tile_label_q.get(highlighted_tile_entity) {
-            if let Ok(mut tile_text) = text_q.get_mut(label.0) {
+    for highlighted_tile_entity in highlighted_tiles_query.iter() {
+        if let Ok(label) = tile_label_query.get(highlighted_tile_entity) {
+            if let Ok(mut tile_text) = text_query.get_mut(label.0) {
                 for section in tile_text.sections.iter_mut() {
                     section.style.color = Color::BLACK;
                 }
@@ -357,7 +385,7 @@ fn highlight_tile_labels(
         }
     }
 
-    for (map_size, grid_size, map_type, tile_storage, map_transform) in tilemap_q.iter() {
+    for (map_size, grid_size, map_type, tile_storage, map_transform) in tilemap_query.iter() {
         // Grab the cursor position from the `Res<CursorPos>`
         let cursor_pos: Vec2 = cursor_pos.0;
         // We need to make sure that the cursor's world position is correct relative to
@@ -375,8 +403,8 @@ fn highlight_tile_labels(
         {
             // Highlight the relevant tile's label
             if let Some(tile_entity) = tile_storage.get(&tile_pos) {
-                if let Ok(label) = tile_label_q.get(tile_entity) {
-                    if let Ok(mut tile_text) = text_q.get_mut(label.0) {
+                if let Ok(label) = tile_label_query.get(tile_entity) {
+                    if let Ok(mut tile_text) = text_query.get_mut(label.0) {
                         for section in tile_text.sections.iter_mut() {
                             section.style.color = palettes::tailwind::RED_600.into();
                         }
