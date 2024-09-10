@@ -442,7 +442,7 @@ fn post_spawn_tilemap(
     }
 }
 
-/// Generates tile position labels of the form: `(tile_pos.x, tile_pos.y)`
+/// Generates tile position labels.
 fn spawn_tile_labels(
     mut commands: Commands,
     tilemap_query: Query<
@@ -474,6 +474,7 @@ fn spawn_tile_labels(
                 )
                 .with_justify(text_justify),
                 transform,
+                visibility: Visibility::Hidden,
                 ..Default::default()
             })
             .id();
@@ -493,8 +494,9 @@ fn update_cursor_pos(
         // To get the mouse's world position, we have to transform its window position
         // by any transforms on the camera. This is done by projecting the
         // cursor position into camera space (world space).
-        for (cam_t, cam) in camera_query.iter() {
-            if let Some(pos) = cam.viewport_to_world_2d(cam_t, cursor_moved.position) {
+        for (camera_transform, camera) in camera_query.iter() {
+            if let Some(pos) = camera.viewport_to_world_2d(camera_transform, cursor_moved.position)
+            {
                 *cursor_pos = CursorPos(pos);
             }
         }
@@ -517,15 +519,16 @@ fn highlight_tile_labels(
     >,
     highlighted_tiles_query: Query<Entity, With<HighlightedLabel>>,
     tile_label_query: Query<&TileLabel>,
-    mut text_query: Query<&mut Text>,
+    mut text_query: Query<(&mut Text, &mut Visibility)>,
 ) {
     // Un-highlight any previously highlighted tile labels.
     for highlighted_tile_entity in highlighted_tiles_query.iter() {
         if let Ok(label) = tile_label_query.get(highlighted_tile_entity) {
-            if let Ok(mut tile_text) = text_query.get_mut(label.0) {
+            if let Ok((mut tile_text, mut visibility)) = text_query.get_mut(label.0) {
                 for section in tile_text.sections.iter_mut() {
                     section.style.color = Color::BLACK;
                 }
+                *visibility = Visibility::Hidden;
                 commands
                     .entity(highlighted_tile_entity)
                     .remove::<HighlightedLabel>();
@@ -553,10 +556,11 @@ fn highlight_tile_labels(
         // Highlight the relevant tile's label
         if let Some(tile_entity) = tile_storage.get(&tile_pos) {
             if let Ok(label) = tile_label_query.get(tile_entity) {
-                if let Ok(mut tile_text) = text_query.get_mut(label.0) {
+                if let Ok((mut tile_text, mut visibility)) = text_query.get_mut(label.0) {
                     for section in tile_text.sections.iter_mut() {
                         section.style.color = palettes::tailwind::RED_600.into();
                     }
+                    *visibility = Visibility::Visible;
                     commands.entity(tile_entity).insert(HighlightedLabel);
                 }
             }
