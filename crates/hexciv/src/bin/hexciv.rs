@@ -48,7 +48,13 @@ enum BaseTerrainVariant {
 #[derive(Copy, Clone)]
 #[repr(u32)]
 enum TerrainFeatures {
-    Ice = 0,
+    // TODO: woods
+    // TODO: rainforest
+    // TODO: marsh
+    // TODO: floodplains
+    Oasis = 0,
+    // TODO: reef
+    Ice = 1,
 }
 
 enum EarthLatitude {
@@ -329,7 +335,15 @@ fn spawn_tilemap(mut commands: Commands, asset_server: Res<AssetServer>, map_see
         })
         .insert(BaseTerrainLayer);
 
-    let image_handles = vec![asset_server.load("tiles/overlay-ice.png")];
+    let image_handles = vec![
+        // TODO: woods
+        // TODO: rainforest
+        // TODO: marsh
+        // TODO: floodplains
+        asset_server.load("tiles/oasis.png"),
+        // TODO: reef
+        asset_server.load("tiles/ice.png"),
+    ];
     let texture_vec = TilemapTexture::Vector(image_handles);
 
     let tile_storage = TileStorage::empty(map_size);
@@ -365,6 +379,7 @@ fn post_spawn_tilemap(
     let mut rng = fastrand::Rng::new();
     rng.seed(map_seed.0);
 
+    let oasis_choices = [true, false, false, false, false];
     let ice_choices = [true, true, true, false];
 
     let (map_size, base_terrain_tile_storage) = base_terrain_tilemap_query.get_single().unwrap();
@@ -374,37 +389,54 @@ fn post_spawn_tilemap(
         for y in 0..map_size.y {
             let tile_pos = TilePos { x, y };
             let tile_entity = base_terrain_tile_storage.get(&tile_pos).unwrap();
-            let tile_texture = tile_query.get(tile_entity).unwrap();
-            if tile_texture.0 != BaseTerrain::Ocean as u32 {
-                continue;
-            }
-            let neighbor_entities =
-                HexNeighbors::get_neighboring_positions_row_odd(&tile_pos, map_size)
-                    .entities(base_terrain_tile_storage);
-            if neighbor_entities.iter().any(|neighbor_entity| {
-                let tile_texture = tile_query.get(*neighbor_entity).unwrap();
-                tile_texture.0 != BaseTerrain::Ocean as u32
-                    && tile_texture.0 != BaseTerrain::Coast as u32
-            }) {
-                let mut tile_texture = tile_query.get_mut(tile_entity).unwrap();
-                tile_texture.0 = BaseTerrain::Coast as u32;
+            let tile_texture = *tile_query.get(tile_entity).unwrap();
+
+            if tile_texture.0 == BaseTerrain::Ocean as u32 {
+                let neighbor_entities =
+                    HexNeighbors::get_neighboring_positions_row_odd(&tile_pos, map_size)
+                        .entities(base_terrain_tile_storage);
+                if neighbor_entities.iter().any(|neighbor_entity| {
+                    let tile_texture = tile_query.get(*neighbor_entity).unwrap();
+                    tile_texture.0 != BaseTerrain::Ocean as u32
+                        && tile_texture.0 != BaseTerrain::Coast as u32
+                }) {
+                    let mut tile_texture = tile_query.get_mut(tile_entity).unwrap();
+                    tile_texture.0 = BaseTerrain::Coast as u32;
+                }
             }
 
-            let latitude = -90.0 + 180.0 * ((f64::from(tile_pos.y) + 0.5) / f64::from(map_size.y));
-
-            if (latitude >= EarthLatitude::ArticCirle.latitude()
-                || latitude <= EarthLatitude::AntarcticCircle.latitude())
-                && rng.choice(ice_choices).unwrap()
-            {
+            if tile_texture.0 == BaseTerrain::Desert as u32 && rng.choice(oasis_choices).unwrap() {
                 let tile_entity = commands
                     .spawn(TileBundle {
                         position: tile_pos,
                         tilemap_id: TilemapId(terrain_features_tilemap_entity),
-                        texture_index: TileTextureIndex(TerrainFeatures::Ice as u32),
+                        texture_index: TileTextureIndex(TerrainFeatures::Oasis as u32),
                         ..Default::default()
                     })
                     .id();
                 terrain_features_tile_storage.set(&tile_pos, tile_entity);
+            }
+
+            if tile_texture.0 == BaseTerrain::Ocean as u32
+                || tile_texture.0 == BaseTerrain::Coast as u32
+            {
+                let latitude =
+                    -90.0 + 180.0 * ((f64::from(tile_pos.y) + 0.5) / f64::from(map_size.y));
+
+                if (latitude >= EarthLatitude::ArticCirle.latitude()
+                    || latitude <= EarthLatitude::AntarcticCircle.latitude())
+                    && rng.choice(ice_choices).unwrap()
+                {
+                    let tile_entity = commands
+                        .spawn(TileBundle {
+                            position: tile_pos,
+                            tilemap_id: TilemapId(terrain_features_tilemap_entity),
+                            texture_index: TileTextureIndex(TerrainFeatures::Ice as u32),
+                            ..Default::default()
+                        })
+                        .id();
+                    terrain_features_tile_storage.set(&tile_pos, tile_entity);
+                }
             }
         }
     }
