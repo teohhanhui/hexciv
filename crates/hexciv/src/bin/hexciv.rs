@@ -356,7 +356,7 @@ fn spawn_tilemap(
         let image_map: BTreeMap<u16, Handle<Image>> = repeat_n([true, false].into_iter(), 6)
             .multi_cartesian_product()
             .map(|data| {
-                let mut bits: RiverEdges = BitArray::ZERO;
+                let mut bits: RiverEdges = BitArray::<_>::ZERO;
                 for (i, v) in data.iter().enumerate() {
                     bits.set(i, *v);
                 }
@@ -560,7 +560,7 @@ fn post_spawn_tilemap(
                         terrain.get_elevation(&site)
                     })
                     .collect();
-                let mut river_edges: RiverEdges = BitArray::ZERO;
+                let mut river_edges: RiverEdges = BitArray::<_>::ZERO;
                 for i in 0..6 {
                     let Some(elevation) = elevations[i] else {
                         continue;
@@ -571,59 +571,75 @@ fn post_spawn_tilemap(
                     let elevation_a = elevations[a].unwrap_or(f64::NAN);
                     let elevation_b = elevations[b].unwrap_or(f64::NAN);
                     let elevation_c = elevations[c].unwrap_or(f64::NAN);
-                    if elevation >= 5.0 {
-                        let dest_elevation_min = elevation_a.min(elevation_b).min(elevation_c);
-                        if !dest_elevation_min.is_nan() && dest_elevation_min < elevation {
-                            let edge = if dest_elevation_min == elevation_a {
-                                a
-                            } else if dest_elevation_min == elevation_b {
-                                i
-                            } else {
-                                // Vertex C lies outside of the current tile.
-                                continue;
-                            };
-                            if let Some(edge_adjacent_tile_entity) =
-                                neighbor_entities.get(HEX_DIRECTIONS[edge])
-                            {
-                                let edge_adjacent_tile_texture =
-                                    *tile_query.get(*edge_adjacent_tile_entity).unwrap();
-                                if [BaseTerrain::Ocean as u32, BaseTerrain::Coast as u32]
-                                    .contains(&edge_adjacent_tile_texture.0)
-                                {
-                                    // River does not flow parallel to the sea.
-                                    continue;
-                                }
-                            }
-                            let source_vertex = if edge == 0 { 5 } else { edge - 1 };
-                            let Some(source_tile_entity) =
-                                neighbor_entities.get(HEX_DIRECTIONS[source_vertex])
-                            else {
-                                // Source tile does not exist.
-                                continue;
-                            };
-                            let source_tile_texture = *tile_query.get(*source_tile_entity).unwrap();
-                            if ![
-                                BaseTerrain::Desert as u32,
-                                BaseTerrain::Desert as u32 + BaseTerrainVariant::Hills as u32,
-                                BaseTerrain::Desert as u32 + BaseTerrainVariant::Mountains as u32,
-                            ]
-                            .contains(&source_tile_texture.0)
-                            {
-                                // Desert cannot be river source.
-                                river_edges.set(edge, true);
-                            }
+                    if elevation < 5.0 {
+                        // Exclude lowlands as river source.
+                        continue;
+                    }
+                    let dest_elevation_min = elevation_a.min(elevation_b).min(elevation_c);
+                    if dest_elevation_min.is_nan() || elevation <= dest_elevation_min {
+                        // Avoid creating river edges going to the same or higher elevation.
+                        continue;
+                    }
+                    let edge = if dest_elevation_min == elevation_a {
+                        a
+                    } else if dest_elevation_min == elevation_b {
+                        i
+                    } else {
+                        // Vertex C lies outside of the current tile.
+                        continue;
+                    };
+                    if let Some(edge_adjacent_tile_entity) =
+                        neighbor_entities.get(HEX_DIRECTIONS[edge])
+                    {
+                        let tile_texture = *tile_query.get(*edge_adjacent_tile_entity).unwrap();
+                        if [BaseTerrain::Ocean as u32, BaseTerrain::Coast as u32]
+                            .contains(&tile_texture.0)
+                        {
+                            // Avoid creating river edges parallel to the sea.
+                            continue;
                         }
                     }
+                    let source_edge = if edge == i {
+                        // River edge is going in clockwise direction.
+                        if edge == 0 {
+                            5
+                        } else {
+                            edge - 1
+                        }
+                    } else {
+                        // River edge is going in counter-clockwise direction.
+                        i
+                    };
+                    let Some(source_tile_entity) =
+                        neighbor_entities.get(HEX_DIRECTIONS[source_edge])
+                    else {
+                        // Source tile does not exist.
+                        continue;
+                    };
+                    let source_tile_texture = *tile_query.get(*source_tile_entity).unwrap();
+                    if [
+                        BaseTerrain::Desert as u32,
+                        BaseTerrain::Desert as u32 + BaseTerrainVariant::Hills as u32,
+                        BaseTerrain::Desert as u32 + BaseTerrainVariant::Mountains as u32,
+                    ]
+                    .contains(&source_tile_texture.0)
+                    {
+                        // Exclude deserts as river source.
+                        continue;
+                    }
+                    river_edges.set(edge, true);
                 }
-                let tile_entity = commands
-                    .spawn(TileBundle {
-                        position: tile_pos,
-                        tilemap_id: TilemapId(river_tilemap_entity),
-                        texture_index: TileTextureIndex(u32::from(river_edges.load::<u16>())),
-                        ..Default::default()
-                    })
-                    .id();
-                river_tile_storage.set(&tile_pos, tile_entity);
+                if !river_edges.is_empty() {
+                    let tile_entity = commands
+                        .spawn(TileBundle {
+                            position: tile_pos,
+                            tilemap_id: TilemapId(river_tilemap_entity),
+                            texture_index: TileTextureIndex(u32::from(river_edges.load::<u16>())),
+                            ..Default::default()
+                        })
+                        .id();
+                    river_tile_storage.set(&tile_pos, tile_entity);
+                }
             }
         }
     }
