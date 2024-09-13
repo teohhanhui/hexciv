@@ -1,10 +1,14 @@
+use std::collections::BTreeMap;
+
 use bevy::color::palettes;
 use bevy::prelude::*;
 use bevy_ecs_tilemap::prelude::*;
 use bevy_pancam::{PanCam, PanCamPlugin};
-use fastlem_random_terrain::generate_terrain;
+use bitvec::prelude::*;
+use fastlem_random_terrain::{generate_terrain, Site2D, Terrain2D};
 use fastrand_contrib::RngExt as _;
-use helpers::hex_grid::neighbors::HexNeighbors;
+use helpers::hex_grid::neighbors::{HexNeighbors, HEX_DIRECTIONS};
+use itertools::{repeat_n, Itertools as _};
 
 // IMPORTANT: The map's dimensions must both be even numbers, due to the
 // assumptions being made in our calculations.
@@ -21,10 +25,60 @@ const GRID_SIZE: TilemapGridSize = TilemapGridSize {
 
 const ODD_ROW_OFFSET: f64 = 0.5 * GRID_SIZE.x as f64;
 
-const TILE_CENTER_TO_CENTER_X: f64 = GRID_SIZE.x as f64;
-const TILE_CENTER_TO_CENTER_Y: f64 = 0.8660254 * GRID_SIZE.x as f64;
+/// The center-to-center distance between adjacent columns of tiles.
+const CENTER_TO_CENTER_X: f64 = GRID_SIZE.x as f64;
+/// The center-to-center distance between adjacent rows of tiles.
+const CENTER_TO_CENTER_Y: f64 = 0.75 * GRID_SIZE.y as f64;
 
-const TILE_LABEL_Z_INDEX: f32 = 2.0;
+const BOUND_WIDTH: f64 =
+    ((MAP_SIDE_LENGTH_X - 1) as f64 * CENTER_TO_CENTER_X + GRID_SIZE.x as f64 + ODD_ROW_OFFSET)
+        / 100.0;
+const BOUND_HEIGHT: f64 =
+    ((MAP_SIDE_LENGTH_Y - 1) as f64 * CENTER_TO_CENTER_Y + GRID_SIZE.y as f64) / 100.0;
+
+const BOUND_MIN: Site2D = Site2D {
+    x: -BOUND_WIDTH / 2.0,
+    y: -BOUND_HEIGHT / 2.0,
+};
+const BOUND_MAX: Site2D = Site2D {
+    x: BOUND_WIDTH / 2.0,
+    y: BOUND_HEIGHT / 2.0,
+};
+const BOUND_RANGE: Site2D = Site2D {
+    x: BOUND_WIDTH,
+    y: BOUND_HEIGHT,
+};
+
+const TILE_LABEL_Z_INDEX: f32 = 3.0;
+
+const FRIGID_ZONE_TILE_CHOICES: [BaseTerrain; 2] = [BaseTerrain::Tundra, BaseTerrain::Snow];
+const TEMPERATE_ZONE_TILE_CHOICES: [BaseTerrain; 4] = [
+    BaseTerrain::Plains,
+    BaseTerrain::Plains,
+    BaseTerrain::Plains,
+    BaseTerrain::Grassland,
+];
+const SUBTROPICS_TILE_CHOICES: [BaseTerrain; 7] = [
+    BaseTerrain::Plains,
+    BaseTerrain::Plains,
+    BaseTerrain::Plains,
+    BaseTerrain::Grassland,
+    BaseTerrain::Grassland,
+    BaseTerrain::Desert,
+    BaseTerrain::Desert,
+];
+const TROPICS_TILE_CHOICES: [BaseTerrain; 7] = [
+    BaseTerrain::Plains,
+    BaseTerrain::Plains,
+    BaseTerrain::Grassland,
+    BaseTerrain::Grassland,
+    BaseTerrain::Grassland,
+    BaseTerrain::Grassland,
+    BaseTerrain::Desert,
+];
+
+const OASIS_CHOICES: [bool; 5] = [true, false, false, false, false];
+const ICE_CHOICES: [bool; 4] = [true, true, true, false];
 
 #[derive(Copy, Clone, Eq, PartialEq)]
 #[repr(u32)]
@@ -45,16 +99,18 @@ enum BaseTerrainVariant {
     Mountains = 10,
 }
 
+type RiverVertices = BitArr!(for 6, in u16);
+
 #[derive(Copy, Clone)]
 #[repr(u32)]
 enum TerrainFeatures {
-    // TODO: woods
-    // TODO: rainforest
-    // TODO: marsh
-    // TODO: floodplains
-    Oasis = 0,
-    // TODO: reef
-    Ice = 1,
+    // Woods = 0,
+    // Rainforest = 1,
+    // Marsh = 2,
+    // Floodplains = 3,
+    Oasis = 4,
+    // Reef = 5,
+    Ice = 6,
 }
 
 enum EarthLatitude {
@@ -68,7 +124,10 @@ enum EarthLatitude {
 struct FontHandle(Handle<Font>);
 
 #[derive(Resource)]
-struct MapSeed(u64);
+struct MapRng(fastrand::Rng);
+
+#[derive(Resource)]
+struct MapTerrain(Terrain2D);
 
 #[derive(Resource)]
 struct CursorPos(Vec2);
@@ -76,6 +135,10 @@ struct CursorPos(Vec2);
 /// Marker for the base terrain layer tilemap.
 #[derive(Component)]
 struct BaseTerrainLayer;
+
+/// Marker for the river layer tilemap.
+#[derive(Component)]
+struct RiverLayer;
 
 /// Marker for the terrain features layer tilemap.
 #[derive(Component)]
@@ -108,10 +171,10 @@ impl FromWorld for FontHandle {
     }
 }
 
-impl FromWorld for MapSeed {
+impl FromWorld for MapRng {
     fn from_world(_world: &mut World) -> Self {
         let rng = fastrand::Rng::new();
-        Self(rng.get_seed())
+        Self(rng)
     }
 }
 
@@ -123,8 +186,12 @@ impl Default for CursorPos {
     }
 }
 
-impl TerrainFeaturesLayer {
+impl RiverLayer {
     const Z_INDEX: f32 = 1.0;
+}
+
+impl TerrainFeaturesLayer {
+    const Z_INDEX: f32 = 2.0;
 }
 
 fn main() {
@@ -143,7 +210,7 @@ fn main() {
         .add_plugins(PanCamPlugin)
         .add_plugins(TilemapPlugin)
         .init_resource::<FontHandle>()
-        .init_resource::<MapSeed>()
+        .init_resource::<MapRng>()
         .init_resource::<CursorPos>()
         .add_systems(
             Startup,
@@ -157,7 +224,11 @@ fn main() {
 }
 
 /// Generates the initial tilemap.
-fn spawn_tilemap(mut commands: Commands, asset_server: Res<AssetServer>, map_seed: Res<MapSeed>) {
+fn spawn_tilemap(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    mut map_rng: ResMut<MapRng>,
+) {
     commands.spawn(Camera2dBundle::default()).insert(PanCam {
         grab_buttons: vec![MouseButton::Left],
         min_scale: 1.0,
@@ -191,29 +262,8 @@ fn spawn_tilemap(mut commands: Commands, asset_server: Res<AssetServer>, map_see
         y: MAP_SIDE_LENGTH_Y,
     };
 
-    const BOUND_WIDTH: f64 = ((MAP_SIDE_LENGTH_X - 1) as f64 * TILE_CENTER_TO_CENTER_X
-        + GRID_SIZE.x as f64
-        + ODD_ROW_OFFSET)
-        / 100.0;
-    const BOUND_HEIGHT: f64 =
-        ((MAP_SIDE_LENGTH_Y - 1) as f64 * TILE_CENTER_TO_CENTER_Y + GRID_SIZE.y as f64) / 100.0;
-
-    let bound_min = fastlem_random_terrain::Site2D {
-        x: -BOUND_WIDTH / 2.0,
-        y: -BOUND_HEIGHT / 2.0,
-    };
-    let bound_max = fastlem_random_terrain::Site2D {
-        x: BOUND_WIDTH / 2.0,
-        y: BOUND_HEIGHT / 2.0,
-    };
-    let bound_range = fastlem_random_terrain::Site2D {
-        x: BOUND_WIDTH,
-        y: BOUND_HEIGHT,
-    };
-
-    let mut rng = fastrand::Rng::new();
-    rng.seed(map_seed.0);
-    info!(seed = map_seed.0, "map seed");
+    let rng = &mut map_rng.0;
+    info!(seed = rng.get_seed(), "map seed");
 
     let terrain = {
         let config = fastlem_random_terrain::Config {
@@ -222,90 +272,57 @@ fn spawn_tilemap(mut commands: Commands, asset_server: Res<AssetServer>, map_see
             ..Default::default()
         };
         info!(?config, "fastlem-random-terrain config");
-        generate_terrain(&config, bound_min, bound_max, bound_range)
+        generate_terrain(&config, BOUND_MIN, BOUND_MAX, BOUND_RANGE)
     };
 
     let mut tile_storage = TileStorage::empty(map_size);
     let tilemap_entity = commands.spawn_empty().id();
     let tilemap_id = TilemapId(tilemap_entity);
 
-    let frigid_zone_tile_choices = vec![BaseTerrain::Tundra, BaseTerrain::Snow];
-    let temperate_zone_tile_choices = vec![
-        BaseTerrain::Plains,
-        BaseTerrain::Plains,
-        BaseTerrain::Plains,
-        BaseTerrain::Grassland,
-    ];
-    let subtropics_tile_choices = vec![
-        BaseTerrain::Plains,
-        BaseTerrain::Plains,
-        BaseTerrain::Plains,
-        BaseTerrain::Grassland,
-        BaseTerrain::Grassland,
-        BaseTerrain::Desert,
-        BaseTerrain::Desert,
-    ];
-    let tropics_tile_choices = vec![
-        BaseTerrain::Plains,
-        BaseTerrain::Plains,
-        BaseTerrain::Grassland,
-        BaseTerrain::Grassland,
-        BaseTerrain::Grassland,
-        BaseTerrain::Grassland,
-        BaseTerrain::Desert,
-    ];
-
     for x in 0..map_size.x {
         for y in 0..map_size.y {
             let tile_pos = TilePos { x, y };
             let elevation = {
-                let x = bound_min.x
+                let x = BOUND_MIN.x
                     + (f64::from(GRID_SIZE.x) / 2.0
-                        + f64::from(tile_pos.x) * TILE_CENTER_TO_CENTER_X
+                        + f64::from(tile_pos.x) * CENTER_TO_CENTER_X
                         + if tile_pos.y % 2 == 0 {
                             0.0
                         } else {
                             ODD_ROW_OFFSET
                         })
                         / 100.0;
-                let y = bound_min.y
+                let y = BOUND_MIN.y
                     + (f64::from(GRID_SIZE.y) / 2.0
-                        + f64::from(map_size.y - tile_pos.y - 1) * TILE_CENTER_TO_CENTER_Y)
+                        + f64::from(map_size.y - tile_pos.y - 1) * CENTER_TO_CENTER_Y)
                         / 100.0;
-                let site = fastlem_random_terrain::Site2D { x, y };
-                terrain.get_elevation(&site).unwrap()
+                let site = Site2D { x, y };
+                terrain.get_elevation(&site)
             };
-            let texture_index = if elevation < 0.05 {
-                TileTextureIndex(BaseTerrain::Ocean as u32)
+            let texture_index = if let Some(elevation) = elevation {
+                if elevation < 0.05 {
+                    TileTextureIndex(BaseTerrain::Ocean as u32)
+                } else {
+                    let latitude =
+                        -90.0 + 180.0 * ((f64::from(tile_pos.y) + 0.5) / f64::from(map_size.y));
+
+                    let choice = choose_base_terrain_by_latitude(rng, latitude);
+
+                    TileTextureIndex(if elevation >= 25.0 {
+                        choice as u32 + BaseTerrainVariant::Mountains as u32
+                    } else if elevation >= 5.0 {
+                        choice as u32 + BaseTerrainVariant::Hills as u32
+                    } else {
+                        choice as u32
+                    })
+                }
             } else {
                 let latitude =
                     -90.0 + 180.0 * ((f64::from(tile_pos.y) + 0.5) / f64::from(map_size.y));
 
-                let choice = *rng
-                    .choice(
-                        if latitude >= EarthLatitude::ArticCirle.latitude()
-                            || latitude <= EarthLatitude::AntarcticCircle.latitude()
-                        {
-                            &frigid_zone_tile_choices
-                        } else if latitude >= 35.0 || latitude <= -35.0 {
-                            &temperate_zone_tile_choices
-                        } else if latitude >= EarthLatitude::TropicOfCancer.latitude()
-                            || latitude <= EarthLatitude::TropicOfCapricorn.latitude()
-                        {
-                            &subtropics_tile_choices
-                        } else {
-                            &tropics_tile_choices
-                        },
-                    )
-                    .unwrap();
+                let choice = choose_base_terrain_by_latitude(rng, latitude);
 
-                TileTextureIndex(if elevation >= 25.0 {
-                    choice as u32 + BaseTerrainVariant::Mountains as u32
-                } else if elevation >= 5.0 {
-                    choice as u32 + BaseTerrainVariant::Hills as u32
-                } else {
-                    choice as u32
-                })
+                TileTextureIndex(choice as u32)
             };
             let tile_entity = commands
                 .spawn(TileBundle {
@@ -335,13 +352,66 @@ fn spawn_tilemap(mut commands: Commands, asset_server: Res<AssetServer>, map_see
         })
         .insert(BaseTerrainLayer);
 
+    let image_handles = {
+        let image_map: BTreeMap<u16, Handle<Image>> = repeat_n([true, false].into_iter(), 6)
+            .multi_cartesian_product()
+            .map(|data| {
+                let mut bits: RiverVertices = BitArray::ZERO;
+                for (i, v) in data.iter().enumerate() {
+                    bits.set(i, *v);
+                }
+                (
+                    bits.load(),
+                    asset_server.load(format!(
+                        "tiles/river-{vertices}.png",
+                        vertices = data
+                            .iter()
+                            .enumerate()
+                            .map(|(i, v)| if *v { i.to_string() } else { "x".to_owned() })
+                            .join("")
+                    )),
+                )
+            })
+            .collect();
+        let size = usize::from(*image_map.last_key_value().unwrap().0) + 1;
+        let mut image_vec = vec![asset_server.load("tiles/transparent.png"); size];
+        for (key, image) in image_map {
+            image_vec[usize::from(key)] = image;
+        }
+        image_vec
+    };
+    let texture_vec = TilemapTexture::Vector(image_handles);
+
+    let tile_storage = TileStorage::empty(map_size);
+    let tilemap_entity = commands.spawn_empty().id();
+
+    commands
+        .entity(tilemap_entity)
+        .insert(TilemapBundle {
+            grid_size: GRID_SIZE,
+            size: map_size,
+            storage: tile_storage,
+            texture: texture_vec,
+            tile_size: TILE_SIZE,
+            map_type,
+            transform: get_tilemap_center_transform(&map_size, &GRID_SIZE, &map_type, 0.0)
+                * Transform::from_xyz(0.0, 0.0, RiverLayer::Z_INDEX),
+            ..Default::default()
+        })
+        .insert(RiverLayer);
+
     let image_handles = vec![
         // TODO: woods
+        asset_server.load("tiles/transparent.png"),
         // TODO: rainforest
+        asset_server.load("tiles/transparent.png"),
         // TODO: marsh
+        asset_server.load("tiles/transparent.png"),
         // TODO: floodplains
+        asset_server.load("tiles/transparent.png"),
         asset_server.load("tiles/oasis.png"),
         // TODO: reef
+        asset_server.load("tiles/transparent.png"),
         asset_server.load("tiles/ice.png"),
     ];
     let texture_vec = TilemapTexture::Vector(image_handles);
@@ -363,49 +433,63 @@ fn spawn_tilemap(mut commands: Commands, asset_server: Res<AssetServer>, map_see
             ..Default::default()
         })
         .insert(TerrainFeaturesLayer);
+
+    commands.insert_resource(MapTerrain(terrain));
 }
 
 #[allow(clippy::type_complexity)]
 fn post_spawn_tilemap(
     mut commands: Commands,
-    map_seed: Res<MapSeed>,
+    mut map_rng: ResMut<MapRng>,
+    map_terrain: Res<MapTerrain>,
     base_terrain_tilemap_query: Query<(&TilemapSize, &TileStorage), With<BaseTerrainLayer>>,
     mut terrain_features_tilemap_query: Query<
         (Entity, &mut TileStorage),
-        (With<TerrainFeaturesLayer>, Without<BaseTerrainLayer>),
+        (
+            With<TerrainFeaturesLayer>,
+            Without<BaseTerrainLayer>,
+            Without<RiverLayer>,
+        ),
+    >,
+    mut river_tilemap_query: Query<
+        (Entity, &mut TileStorage),
+        (
+            With<RiverLayer>,
+            Without<BaseTerrainLayer>,
+            Without<TerrainFeaturesLayer>,
+        ),
     >,
     mut tile_query: Query<&mut TileTextureIndex>,
 ) {
-    let mut rng = fastrand::Rng::new();
-    rng.seed(map_seed.0);
-
-    let oasis_choices = [true, false, false, false, false];
-    let ice_choices = [true, true, true, false];
+    let rng = &mut map_rng.0;
+    let terrain = &map_terrain.0;
 
     let (map_size, base_terrain_tile_storage) = base_terrain_tilemap_query.get_single().unwrap();
     let (terrain_features_tilemap_entity, mut terrain_features_tile_storage) =
         terrain_features_tilemap_query.get_single_mut().unwrap();
+    let (river_tilemap_entity, mut river_tile_storage) =
+        river_tilemap_query.get_single_mut().unwrap();
     for x in 0..map_size.x {
         for y in 0..map_size.y {
             let tile_pos = TilePos { x, y };
             let tile_entity = base_terrain_tile_storage.get(&tile_pos).unwrap();
             let tile_texture = *tile_query.get(tile_entity).unwrap();
+            let neighbor_positions =
+                HexNeighbors::get_neighboring_positions_row_odd(&tile_pos, map_size);
+            let neighbor_entities = neighbor_positions.entities(base_terrain_tile_storage);
 
-            if tile_texture.0 == BaseTerrain::Ocean as u32 {
-                let neighbor_entities =
-                    HexNeighbors::get_neighboring_positions_row_odd(&tile_pos, map_size)
-                        .entities(base_terrain_tile_storage);
-                if neighbor_entities.iter().any(|neighbor_entity| {
+            if tile_texture.0 == BaseTerrain::Ocean as u32
+                && neighbor_entities.iter().any(|neighbor_entity| {
                     let tile_texture = tile_query.get(*neighbor_entity).unwrap();
                     tile_texture.0 != BaseTerrain::Ocean as u32
                         && tile_texture.0 != BaseTerrain::Coast as u32
-                }) {
-                    let mut tile_texture = tile_query.get_mut(tile_entity).unwrap();
-                    tile_texture.0 = BaseTerrain::Coast as u32;
-                }
+                })
+            {
+                let mut tile_texture = tile_query.get_mut(tile_entity).unwrap();
+                tile_texture.0 = BaseTerrain::Coast as u32;
             }
 
-            if tile_texture.0 == BaseTerrain::Desert as u32 && rng.choice(oasis_choices).unwrap() {
+            if tile_texture.0 == BaseTerrain::Desert as u32 && rng.choice(OASIS_CHOICES).unwrap() {
                 let tile_entity = commands
                     .spawn(TileBundle {
                         position: tile_pos,
@@ -425,7 +509,7 @@ fn post_spawn_tilemap(
 
                 if (latitude >= EarthLatitude::ArticCirle.latitude()
                     || latitude <= EarthLatitude::AntarcticCircle.latitude())
-                    && rng.choice(ice_choices).unwrap()
+                    && rng.choice(ICE_CHOICES).unwrap()
                 {
                     let tile_entity = commands
                         .spawn(TileBundle {
@@ -437,6 +521,87 @@ fn post_spawn_tilemap(
                         .id();
                     terrain_features_tile_storage.set(&tile_pos, tile_entity);
                 }
+            }
+
+            {
+                let elevations = [
+                    (GRID_SIZE.x * 0.5, -GRID_SIZE.y * 0.25),
+                    (GRID_SIZE.x * 0.5, GRID_SIZE.y * 0.25),
+                    (0.0, GRID_SIZE.y * 0.5),
+                    (-GRID_SIZE.x * 0.5, GRID_SIZE.y * 0.25),
+                    (-GRID_SIZE.x * 0.5, -GRID_SIZE.y * 0.25),
+                    (0.0, -GRID_SIZE.y * 0.5),
+                ]
+                .map(|(vertex_x, vertex_y)| {
+                    let x = BOUND_MIN.x
+                        + (f64::from(GRID_SIZE.x) / 2.0
+                            + f64::from(tile_pos.x) * CENTER_TO_CENTER_X
+                            + if tile_pos.y % 2 == 0 {
+                                0.0
+                            } else {
+                                ODD_ROW_OFFSET
+                            }
+                            + f64::from(vertex_x))
+                            / 100.0;
+                    let y = BOUND_MIN.y
+                        + (f64::from(GRID_SIZE.y) / 2.0
+                            + f64::from(map_size.y - tile_pos.y - 1) * CENTER_TO_CENTER_Y
+                            + f64::from(vertex_y))
+                            / 100.0;
+                    let site = Site2D { x, y };
+                    terrain.get_elevation(&site)
+                });
+                let mut river_vertices: RiverVertices = BitArray::ZERO;
+                for i in 0..6 {
+                    let Some(elevation) = elevations[i] else {
+                        continue;
+                    };
+                    let a = if i == 0 { 5 } else { i - 1 };
+                    let b = if i == elevations.len() - 1 { 0 } else { i + 1 };
+                    let elevation_a = elevations[a].unwrap_or(f64::NAN);
+                    let elevation_b = elevations[b].unwrap_or(f64::NAN);
+                    if elevation >= 5.0 {
+                        let elevation_ab_min = elevation_a.min(elevation_b);
+                        if !elevation_ab_min.is_nan() && elevation_ab_min < elevation {
+                            let river_vertex = if elevation_ab_min == elevation_a {
+                                a
+                            } else {
+                                i
+                            };
+                            let source = if river_vertex == 0 {
+                                5
+                            } else {
+                                river_vertex - 1
+                            };
+                            let Some(source_tile_entity) =
+                                neighbor_entities.get(HEX_DIRECTIONS[source])
+                            else {
+                                continue;
+                            };
+                            let source_tile_texture = *tile_query.get(*source_tile_entity).unwrap();
+                            match source_tile_texture {
+                                TileTextureIndex(t)
+                                    if t == BaseTerrain::Desert as u32
+                                        || t == BaseTerrain::Desert as u32
+                                            + BaseTerrainVariant::Hills as u32
+                                        || t == BaseTerrain::Desert as u32
+                                            + BaseTerrainVariant::Mountains as u32 => {},
+                                _ => {
+                                    river_vertices.set(river_vertex, true);
+                                },
+                            }
+                        }
+                    }
+                }
+                let tile_entity = commands
+                    .spawn(TileBundle {
+                        position: tile_pos,
+                        tilemap_id: TilemapId(river_tilemap_entity),
+                        texture_index: TileTextureIndex(u32::from(river_vertices.load::<u16>())),
+                        ..Default::default()
+                    })
+                    .id();
+                river_tile_storage.set(&tile_pos, tile_entity);
             }
         }
     }
@@ -565,5 +730,21 @@ fn highlight_tile_labels(
                 }
             }
         }
+    }
+}
+
+fn choose_base_terrain_by_latitude(rng: &mut fastrand::Rng, latitude: f64) -> BaseTerrain {
+    if latitude >= EarthLatitude::ArticCirle.latitude()
+        || latitude <= EarthLatitude::AntarcticCircle.latitude()
+    {
+        rng.choice(FRIGID_ZONE_TILE_CHOICES).unwrap()
+    } else if latitude >= 35.0 || latitude <= -35.0 {
+        rng.choice(TEMPERATE_ZONE_TILE_CHOICES).unwrap()
+    } else if latitude >= EarthLatitude::TropicOfCancer.latitude()
+        || latitude <= EarthLatitude::TropicOfCapricorn.latitude()
+    {
+        rng.choice(SUBTROPICS_TILE_CHOICES).unwrap()
+    } else {
+        rng.choice(TROPICS_TILE_CHOICES).unwrap()
     }
 }

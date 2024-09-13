@@ -3,6 +3,7 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 pub use fastlem::models::surface::sites::Site2D;
+pub use fastlem::models::surface::terrain::Terrain2D;
 
 pub use self::config::Config;
 pub use self::generate::generate_terrain;
