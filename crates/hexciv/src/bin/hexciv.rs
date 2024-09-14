@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use bevy::color::palettes;
 use bevy::prelude::*;
@@ -22,6 +22,8 @@ const GRID_SIZE: TilemapGridSize = TilemapGridSize {
     x: 100.0,
     y: 115.47005,
 };
+
+const MAP_TYPE: TilemapType = TilemapType::Hexagon(HexCoordSystem::RowOdd);
 
 const ODD_ROW_OFFSET: f64 = 0.5 * GRID_SIZE.x as f64;
 
@@ -48,6 +50,24 @@ const BOUND_RANGE: Site2D = Site2D {
     x: BOUND_WIDTH,
     y: BOUND_HEIGHT,
 };
+
+const VERTEX_OFFSETS: [(f32, f32); 6] = [
+    (GRID_SIZE.x * 0.5, -GRID_SIZE.y * 0.25),
+    (GRID_SIZE.x * 0.5, GRID_SIZE.y * 0.25),
+    (0.0, GRID_SIZE.y * 0.5),
+    (-GRID_SIZE.x * 0.5, GRID_SIZE.y * 0.25),
+    (-GRID_SIZE.x * 0.5, -GRID_SIZE.y * 0.25),
+    (0.0, -GRID_SIZE.y * 0.5),
+];
+
+const EXTENDED_VERTEX_OFFSETS: [(f32, f32); 6] = [
+    (GRID_SIZE.x, -GRID_SIZE.y * 0.5),
+    (GRID_SIZE.x, GRID_SIZE.y * 0.5),
+    (0.0, GRID_SIZE.y),
+    (-GRID_SIZE.x, GRID_SIZE.y * 0.5),
+    (-GRID_SIZE.x, -GRID_SIZE.y * 0.5),
+    (0.0, -GRID_SIZE.y),
+];
 
 const TILE_LABEL_Z_INDEX: f32 = 3.0;
 
@@ -282,7 +302,7 @@ fn spawn_tilemap(
     for x in 0..map_size.x {
         for y in 0..map_size.y {
             let tile_pos = TilePos { x, y };
-            let elevation = {
+            let elevations = VERTEX_OFFSETS.map(|(vertex_offset_x, vertex_offset_y)| {
                 let x = BOUND_MIN.x
                     + (f64::from(GRID_SIZE.x) / 2.0
                         + f64::from(tile_pos.x) * CENTER_TO_CENTER_X
@@ -290,39 +310,37 @@ fn spawn_tilemap(
                             0.0
                         } else {
                             ODD_ROW_OFFSET
-                        })
+                        }
+                        + f64::from(vertex_offset_x))
                         / 100.0;
                 let y = BOUND_MIN.y
                     + (f64::from(GRID_SIZE.y) / 2.0
-                        + f64::from(map_size.y - tile_pos.y - 1) * CENTER_TO_CENTER_Y)
+                        + f64::from(map_size.y - tile_pos.y - 1) * CENTER_TO_CENTER_Y
+                        + f64::from(vertex_offset_y))
                         / 100.0;
                 let site = Site2D { x, y };
                 terrain.get_elevation(&site)
-            };
-            let texture_index = if let Some(elevation) = elevation {
-                if elevation < 0.05 {
-                    TileTextureIndex(BaseTerrain::Ocean as u32)
-                } else {
-                    let latitude =
-                        -90.0 + 180.0 * ((f64::from(tile_pos.y) + 0.5) / f64::from(map_size.y));
-
-                    let choice = choose_base_terrain_by_latitude(rng, latitude);
-
-                    TileTextureIndex(if elevation >= 25.0 {
-                        choice as u32 + BaseTerrainVariant::Mountains as u32
-                    } else if elevation >= 5.0 {
-                        choice as u32 + BaseTerrainVariant::Hills as u32
-                    } else {
-                        choice as u32
-                    })
-                }
+            });
+            let elevations: Vec<_> = elevations
+                .into_iter()
+                .flat_map(|elevation| elevation.filter(|elevation| !elevation.is_nan()))
+                .collect();
+            let elevation = elevations.iter().sum::<f64>() / elevations.len() as f64;
+            let texture_index = if elevation < 0.05 {
+                TileTextureIndex(BaseTerrain::Ocean as u32)
             } else {
                 let latitude =
                     -90.0 + 180.0 * ((f64::from(tile_pos.y) + 0.5) / f64::from(map_size.y));
 
                 let choice = choose_base_terrain_by_latitude(rng, latitude);
 
-                TileTextureIndex(choice as u32)
+                TileTextureIndex(if elevation >= 25.0 {
+                    choice as u32 + BaseTerrainVariant::Mountains as u32
+                } else if elevation >= 5.0 {
+                    choice as u32 + BaseTerrainVariant::Hills as u32
+                } else {
+                    choice as u32
+                })
             };
             let tile_entity = commands
                 .spawn(TileBundle {
@@ -331,12 +349,11 @@ fn spawn_tilemap(
                     texture_index,
                     ..Default::default()
                 })
+                .insert(BaseTerrainLayer)
                 .id();
             tile_storage.set(&tile_pos, tile_entity);
         }
     }
-
-    let map_type = TilemapType::Hexagon(HexCoordSystem::RowOdd);
 
     commands
         .entity(tilemap_entity)
@@ -346,8 +363,8 @@ fn spawn_tilemap(
             storage: tile_storage,
             texture: texture_vec,
             tile_size: TILE_SIZE,
-            map_type,
-            transform: get_tilemap_center_transform(&map_size, &GRID_SIZE, &map_type, 0.0),
+            map_type: MAP_TYPE,
+            transform: get_tilemap_center_transform(&map_size, &GRID_SIZE, &MAP_TYPE, 0.0),
             ..Default::default()
         })
         .insert(BaseTerrainLayer);
@@ -393,8 +410,8 @@ fn spawn_tilemap(
             storage: tile_storage,
             texture: texture_vec,
             tile_size: TILE_SIZE,
-            map_type,
-            transform: get_tilemap_center_transform(&map_size, &GRID_SIZE, &map_type, 0.0)
+            map_type: MAP_TYPE,
+            transform: get_tilemap_center_transform(&map_size, &GRID_SIZE, &MAP_TYPE, 0.0)
                 * Transform::from_xyz(0.0, 0.0, RiverLayer::Z_INDEX),
             ..Default::default()
         })
@@ -427,8 +444,8 @@ fn spawn_tilemap(
             storage: tile_storage,
             texture: texture_vec,
             tile_size: TILE_SIZE,
-            map_type,
-            transform: get_tilemap_center_transform(&map_size, &GRID_SIZE, &map_type, 0.0)
+            map_type: MAP_TYPE,
+            transform: get_tilemap_center_transform(&map_size, &GRID_SIZE, &MAP_TYPE, 0.0)
                 * Transform::from_xyz(0.0, 0.0, TerrainFeaturesLayer::Z_INDEX),
             ..Default::default()
         })
@@ -437,18 +454,18 @@ fn spawn_tilemap(
     commands.insert_resource(MapTerrain(terrain));
 }
 
+#[allow(clippy::too_many_arguments)]
 #[allow(clippy::type_complexity)]
 fn post_spawn_tilemap(
     mut commands: Commands,
     mut map_rng: ResMut<MapRng>,
     map_terrain: Res<MapTerrain>,
-    base_terrain_tilemap_query: Query<(&TilemapSize, &TileStorage), With<BaseTerrainLayer>>,
-    mut terrain_features_tilemap_query: Query<
-        (Entity, &mut TileStorage),
+    base_terrain_tilemap_query: Query<
+        (&TilemapSize, &TileStorage),
         (
-            With<TerrainFeaturesLayer>,
-            Without<BaseTerrainLayer>,
+            With<BaseTerrainLayer>,
             Without<RiverLayer>,
+            Without<TerrainFeaturesLayer>,
         ),
     >,
     mut river_tilemap_query: Query<
@@ -459,7 +476,22 @@ fn post_spawn_tilemap(
             Without<TerrainFeaturesLayer>,
         ),
     >,
-    mut tile_query: Query<&mut TileTextureIndex>,
+    mut terrain_features_tilemap_query: Query<
+        (Entity, &mut TileStorage),
+        (
+            With<TerrainFeaturesLayer>,
+            Without<BaseTerrainLayer>,
+            Without<RiverLayer>,
+        ),
+    >,
+    mut base_terrain_tile_query: Query<
+        &mut TileTextureIndex,
+        (
+            With<BaseTerrainLayer>,
+            Without<RiverLayer>,
+            Without<TerrainFeaturesLayer>,
+        ),
+    >,
 ) {
     let rng = &mut map_rng.0;
     let terrain = &map_terrain.0;
@@ -469,23 +501,26 @@ fn post_spawn_tilemap(
         terrain_features_tilemap_query.get_single_mut().unwrap();
     let (river_tilemap_entity, mut river_tile_storage) =
         river_tilemap_query.get_single_mut().unwrap();
+
+    let mut river_edges_map: HashMap<TilePos, RiverEdges> = HashMap::new();
+
     for x in 0..map_size.x {
         for y in 0..map_size.y {
             let tile_pos = TilePos { x, y };
             let tile_entity = base_terrain_tile_storage.get(&tile_pos).unwrap();
-            let tile_texture = *tile_query.get(tile_entity).unwrap();
+            let tile_texture = *base_terrain_tile_query.get(tile_entity).unwrap();
             let neighbor_positions =
                 HexNeighbors::get_neighboring_positions_row_odd(&tile_pos, map_size);
             let neighbor_entities = neighbor_positions.entities(base_terrain_tile_storage);
 
             if tile_texture.0 == BaseTerrain::Ocean as u32
                 && neighbor_entities.iter().any(|neighbor_entity| {
-                    let tile_texture = tile_query.get(*neighbor_entity).unwrap();
+                    let tile_texture = base_terrain_tile_query.get(*neighbor_entity).unwrap();
                     ![BaseTerrain::Ocean as u32, BaseTerrain::Coast as u32]
                         .contains(&tile_texture.0)
                 })
             {
-                let mut tile_texture = tile_query.get_mut(tile_entity).unwrap();
+                let mut tile_texture = base_terrain_tile_query.get_mut(tile_entity).unwrap();
                 tile_texture.0 = BaseTerrain::Coast as u32;
             }
 
@@ -521,26 +556,22 @@ fn post_spawn_tilemap(
                 }
             }
 
-            if ![BaseTerrain::Ocean as u32, BaseTerrain::Coast as u32].contains(&tile_texture.0) {
-                const VERTEX_OFFSETS: [(f32, f32); 6] = [
-                    (GRID_SIZE.x * 0.5, -GRID_SIZE.y * 0.25),
-                    (GRID_SIZE.x * 0.5, GRID_SIZE.y * 0.25),
-                    (0.0, GRID_SIZE.y * 0.5),
-                    (-GRID_SIZE.x * 0.5, GRID_SIZE.y * 0.25),
-                    (-GRID_SIZE.x * 0.5, -GRID_SIZE.y * 0.25),
-                    (0.0, -GRID_SIZE.y * 0.5),
-                ];
-                const EXTENDED_VERTEX_OFFSETS: [(f32, f32); 6] = [
-                    (GRID_SIZE.x, -GRID_SIZE.y * 0.5),
-                    (GRID_SIZE.x, GRID_SIZE.y * 0.5),
-                    (0.0, GRID_SIZE.y),
-                    (-GRID_SIZE.x, GRID_SIZE.y * 0.5),
-                    (-GRID_SIZE.x, -GRID_SIZE.y * 0.5),
-                    (0.0, -GRID_SIZE.y),
-                ];
-
-                let elevations: Vec<_> = chain(VERTEX_OFFSETS, EXTENDED_VERTEX_OFFSETS)
-                    .map(|(vertex_x, vertex_y)| {
+            if ![
+                BaseTerrain::Ocean as u32,
+                BaseTerrain::Coast as u32,
+                // Exclude lowlands and deserts as river source.
+                BaseTerrain::Plains as u32,
+                BaseTerrain::Grassland as u32,
+                BaseTerrain::Desert as u32,
+                BaseTerrain::Desert as u32 + BaseTerrainVariant::Hills as u32,
+                BaseTerrain::Desert as u32 + BaseTerrainVariant::Mountains as u32,
+                BaseTerrain::Tundra as u32,
+                BaseTerrain::Snow as u32,
+            ]
+            .contains(&tile_texture.0)
+            {
+                let mut elevations: Vec<_> = chain(VERTEX_OFFSETS, EXTENDED_VERTEX_OFFSETS)
+                    .map(|(vertex_offset_x, vertex_offset_y)| {
                         let x = BOUND_MIN.x
                             + (f64::from(GRID_SIZE.x) / 2.0
                                 + f64::from(tile_pos.x) * CENTER_TO_CENTER_X
@@ -549,99 +580,103 @@ fn post_spawn_tilemap(
                                 } else {
                                     ODD_ROW_OFFSET
                                 }
-                                + f64::from(vertex_x))
+                                + f64::from(vertex_offset_x))
                                 / 100.0;
                         let y = BOUND_MIN.y
                             + (f64::from(GRID_SIZE.y) / 2.0
                                 + f64::from(map_size.y - tile_pos.y - 1) * CENTER_TO_CENTER_Y
-                                + f64::from(vertex_y))
+                                + f64::from(vertex_offset_y))
                                 / 100.0;
                         let site = Site2D { x, y };
                         terrain.get_elevation(&site)
                     })
                     .collect();
-                let mut river_edges: RiverEdges = BitArray::<_>::ZERO;
-                for i in 0..6 {
-                    let Some(elevation) = elevations[i] else {
-                        continue;
-                    };
-                    let a = if i == 0 { 5 } else { i - 1 };
-                    let b = if i == 5 { 0 } else { i + 1 };
-                    let c = a + 6;
-                    let elevation_a = elevations[a].unwrap_or(f64::NAN);
-                    let elevation_b = elevations[b].unwrap_or(f64::NAN);
-                    let elevation_c = elevations[c].unwrap_or(f64::NAN);
-                    if elevation < 5.0 {
-                        // Exclude lowlands as river source.
-                        continue;
-                    }
-                    let dest_elevation_min = elevation_a.min(elevation_b).min(elevation_c);
-                    if dest_elevation_min.is_nan() || elevation <= dest_elevation_min {
-                        // Avoid creating river edges going to the same or higher elevation.
-                        continue;
-                    }
-                    let edge = if dest_elevation_min == elevation_a {
-                        a
-                    } else if dest_elevation_min == elevation_b {
-                        i
-                    } else {
-                        // Vertex C lies outside of the current tile.
-                        continue;
-                    };
-                    if let Some(edge_adjacent_tile_entity) =
-                        neighbor_entities.get(HEX_DIRECTIONS[edge])
-                    {
-                        let tile_texture = *tile_query.get(*edge_adjacent_tile_entity).unwrap();
-                        if [BaseTerrain::Ocean as u32, BaseTerrain::Coast as u32]
-                            .contains(&tile_texture.0)
-                        {
-                            // Avoid creating river edges parallel to the sea.
-                            continue;
-                        }
-                    }
-                    let source_edge = if edge == i {
-                        // River edge is going in clockwise direction.
-                        if edge == 0 {
-                            5
-                        } else {
-                            edge - 1
-                        }
-                    } else {
-                        // River edge is going in counter-clockwise direction.
-                        i
-                    };
-                    let Some(source_tile_entity) =
-                        neighbor_entities.get(HEX_DIRECTIONS[source_edge])
-                    else {
-                        // Source tile does not exist.
-                        continue;
-                    };
-                    let source_tile_texture = *tile_query.get(*source_tile_entity).unwrap();
-                    if [
-                        BaseTerrain::Desert as u32,
-                        BaseTerrain::Desert as u32 + BaseTerrainVariant::Hills as u32,
-                        BaseTerrain::Desert as u32 + BaseTerrainVariant::Mountains as u32,
-                    ]
-                    .contains(&source_tile_texture.0)
-                    {
-                        // Exclude deserts as river source.
-                        continue;
-                    }
-                    river_edges.set(edge, true);
+                let dest_elevations = elevations.split_off(6);
+                let elevations: Vec<_> = elevations.into_iter().flatten().collect();
+                if elevations.len() < 6 {
+                    continue;
                 }
-                if !river_edges.is_empty() {
-                    let tile_entity = commands
-                        .spawn(TileBundle {
-                            position: tile_pos,
-                            tilemap_id: TilemapId(river_tilemap_entity),
-                            texture_index: TileTextureIndex(u32::from(river_edges.load::<u16>())),
-                            ..Default::default()
+                let (vertex_min, elevation_min) = {
+                    elevations
+                        .into_iter()
+                        .enumerate()
+                        .reduce(|(vertex_min, elevation_min), (i, elevation)| {
+                            let elevation_min = elevation_min.min(elevation);
+                            let vertex_min = if elevation_min == elevation {
+                                i
+                            } else {
+                                vertex_min
+                            };
+                            (vertex_min, elevation_min)
                         })
-                        .id();
-                    river_tile_storage.set(&tile_pos, tile_entity);
+                        .unwrap()
+                };
+                let Some(dest_elevation) = dest_elevations[vertex_min] else {
+                    continue;
+                };
+                if elevation_min <= dest_elevation {
+                    // Avoid creating river edges going to the same or higher elevation.
+                    continue;
+                }
+
+                let edge_a = if vertex_min == 0 { 5 } else { vertex_min - 1 };
+                let edge_b = vertex_min;
+                if let Some(edge_adjacent_tile_entity) =
+                    neighbor_entities.get(HEX_DIRECTIONS[edge_a])
+                {
+                    let tile_texture = *base_terrain_tile_query
+                        .get(*edge_adjacent_tile_entity)
+                        .unwrap();
+                    if [BaseTerrain::Ocean as u32, BaseTerrain::Coast as u32]
+                        .contains(&tile_texture.0)
+                    {
+                        // Avoid creating river edges parallel to the sea shore / lake shore.
+                        continue;
+                    }
+                }
+                if let Some(edge_adjacent_tile_entity) =
+                    neighbor_entities.get(HEX_DIRECTIONS[edge_b])
+                {
+                    let tile_texture = *base_terrain_tile_query
+                        .get(*edge_adjacent_tile_entity)
+                        .unwrap();
+                    if [BaseTerrain::Ocean as u32, BaseTerrain::Coast as u32]
+                        .contains(&tile_texture.0)
+                    {
+                        // Avoid creating river edges parallel to the sea shore / lake shore.
+                        continue;
+                    }
+                }
+
+                if let Some(tile_pos) = neighbor_positions.get(HEX_DIRECTIONS[edge_a]) {
+                    let river_edges = river_edges_map
+                        .entry(*tile_pos)
+                        .or_insert(BitArray::<_>::ZERO);
+                    let river_edge = (edge_a + 2) % 6;
+                    river_edges.set(river_edge, true);
+                }
+                if let Some(tile_pos) = neighbor_positions.get(HEX_DIRECTIONS[edge_b]) {
+                    let river_edges = river_edges_map
+                        .entry(*tile_pos)
+                        .or_insert(BitArray::<_>::ZERO);
+                    let river_edge = (edge_b + 4) % 6;
+                    river_edges.set(river_edge, true);
                 }
             }
         }
+    }
+
+    for (tile_pos, river_edges) in river_edges_map {
+        let tile_entity = commands
+            .spawn(TileBundle {
+                position: tile_pos,
+                tilemap_id: TilemapId(river_tilemap_entity),
+                texture_index: TileTextureIndex(u32::from(river_edges.load::<u16>())),
+                ..Default::default()
+            })
+            .insert(RiverLayer)
+            .id();
+        river_tile_storage.set(&tile_pos, tile_entity);
     }
 }
 
