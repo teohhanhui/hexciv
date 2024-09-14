@@ -9,6 +9,7 @@ use fastlem_random_terrain::{generate_terrain, Site2D, Terrain2D};
 use fastrand_contrib::RngExt as _;
 use helpers::hex_grid::neighbors::{HexNeighbors, HEX_DIRECTIONS};
 use itertools::{chain, repeat_n, Itertools as _};
+use ordered_float::NotNan;
 
 // IMPORTANT: The map's dimensions must both be even numbers, due to the
 // assumptions being made in our calculations.
@@ -174,12 +175,12 @@ struct HighlightedLabel;
 struct SpawnTilemapSet;
 
 impl EarthLatitude {
-    pub const fn latitude(&self) -> f64 {
+    pub fn latitude(&self) -> NotNan<f64> {
         match self {
-            EarthLatitude::ArticCirle => 66.57,
-            EarthLatitude::TropicOfCancer => 23.43,
-            EarthLatitude::TropicOfCapricorn => -23.43,
-            EarthLatitude::AntarcticCircle => -66.57,
+            EarthLatitude::ArticCirle => NotNan::new(66.57).unwrap(),
+            EarthLatitude::TropicOfCancer => NotNan::new(23.43).unwrap(),
+            EarthLatitude::TropicOfCapricorn => NotNan::new(-23.43).unwrap(),
+            EarthLatitude::AntarcticCircle => NotNan::new(-66.57).unwrap(),
         }
     }
 }
@@ -323,20 +324,25 @@ fn spawn_tilemap(
             });
             let elevations: Vec<_> = elevations
                 .into_iter()
-                .flat_map(|elevation| elevation.filter(|elevation| !elevation.is_nan()))
+                .flat_map(|elevation| {
+                    elevation
+                        .filter(|elevation| !elevation.is_nan())
+                        .map(|elevation| NotNan::new(elevation).unwrap())
+                })
                 .collect();
-            let elevation = elevations.iter().sum::<f64>() / elevations.len() as f64;
-            let texture_index = if elevation < 0.05 {
+            let elevation = elevations.iter().sum::<NotNan<_>>() / elevations.len() as f64;
+            let texture_index = if elevation < NotNan::new(0.05).unwrap() {
                 TileTextureIndex(BaseTerrain::Ocean as u32)
             } else {
-                let latitude =
-                    -90.0 + 180.0 * ((f64::from(tile_pos.y) + 0.5) / f64::from(map_size.y));
+                let latitude = NotNan::new(-90.0).unwrap()
+                    + NotNan::new(180.0).unwrap()
+                        * ((NotNan::from(tile_pos.y) + 0.5) / NotNan::from(map_size.y));
 
                 let choice = choose_base_terrain_by_latitude(rng, latitude);
 
-                TileTextureIndex(if elevation >= 25.0 {
+                TileTextureIndex(if elevation >= NotNan::new(25.0).unwrap() {
                     choice as u32 + BaseTerrainVariant::Mountains as u32
-                } else if elevation >= 5.0 {
+                } else if elevation >= NotNan::new(5.0).unwrap() {
                     choice as u32 + BaseTerrainVariant::Hills as u32
                 } else {
                     choice as u32
@@ -532,13 +538,15 @@ fn post_spawn_tilemap(
                         texture_index: TileTextureIndex(TerrainFeatures::Oasis as u32),
                         ..Default::default()
                     })
+                    .insert(TerrainFeaturesLayer)
                     .id();
                 terrain_features_tile_storage.set(&tile_pos, tile_entity);
             }
 
             if [BaseTerrain::Ocean as u32, BaseTerrain::Coast as u32].contains(&tile_texture.0) {
-                let latitude =
-                    -90.0 + 180.0 * ((f64::from(tile_pos.y) + 0.5) / f64::from(map_size.y));
+                let latitude = NotNan::new(-90.0).unwrap()
+                    + NotNan::new(180.0).unwrap()
+                        * ((NotNan::from(tile_pos.y) + 0.5) / NotNan::from(map_size.y));
 
                 if (latitude >= EarthLatitude::ArticCirle.latitude()
                     || latitude <= EarthLatitude::AntarcticCircle.latitude())
@@ -551,6 +559,7 @@ fn post_spawn_tilemap(
                             texture_index: TileTextureIndex(TerrainFeatures::Ice as u32),
                             ..Default::default()
                         })
+                        .insert(TerrainFeaturesLayer)
                         .id();
                     terrain_features_tile_storage.set(&tile_pos, tile_entity);
                 }
@@ -592,7 +601,14 @@ fn post_spawn_tilemap(
                     })
                     .collect();
                 let dest_elevations = elevations.split_off(6);
-                let elevations: Vec<_> = elevations.into_iter().flatten().collect();
+                let elevations: Vec<_> = elevations
+                    .into_iter()
+                    .flat_map(|elevation| {
+                        elevation
+                            .filter(|elevation| !elevation.is_nan())
+                            .map(|elevation| NotNan::new(elevation).unwrap())
+                    })
+                    .collect();
                 if elevations.len() < 6 {
                     continue;
                 }
@@ -614,12 +630,16 @@ fn post_spawn_tilemap(
                 let Some(dest_elevation) = dest_elevations[vertex_min] else {
                     continue;
                 };
+                if dest_elevation.is_nan() {
+                    continue;
+                }
+                let dest_elevation = NotNan::new(dest_elevation).unwrap();
                 if elevation_min <= dest_elevation {
                     // Avoid creating river edges going to the same or higher elevation.
                     continue;
                 }
 
-                let edge_a = if vertex_min == 0 { 5 } else { vertex_min - 1 };
+                let edge_a = (vertex_min + 5) % 6;
                 let edge_b = vertex_min;
                 if let Some(edge_adjacent_tile_entity) =
                     neighbor_entities.get(HEX_DIRECTIONS[edge_a])
@@ -806,12 +826,12 @@ fn highlight_tile_labels(
     }
 }
 
-fn choose_base_terrain_by_latitude(rng: &mut fastrand::Rng, latitude: f64) -> BaseTerrain {
+fn choose_base_terrain_by_latitude(rng: &mut fastrand::Rng, latitude: NotNan<f64>) -> BaseTerrain {
     if latitude >= EarthLatitude::ArticCirle.latitude()
         || latitude <= EarthLatitude::AntarcticCircle.latitude()
     {
         rng.choice(FRIGID_ZONE_TILE_CHOICES).unwrap()
-    } else if latitude >= 35.0 || latitude <= -35.0 {
+    } else if latitude >= NotNan::new(35.0).unwrap() || latitude <= NotNan::new(-35.0).unwrap() {
         rng.choice(TEMPERATE_ZONE_TILE_CHOICES).unwrap()
     } else if latitude >= EarthLatitude::TropicOfCancer.latitude()
         || latitude <= EarthLatitude::TropicOfCapricorn.latitude()

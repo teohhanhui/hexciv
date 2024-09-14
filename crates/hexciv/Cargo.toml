@@ -19,6 +19,7 @@ fastrand = { workspace = true, features = ["js", "std"] }
 fastrand-contrib = { workspace = true, features = ["std"] }
 itertools = { workspace = true, features = ["use_std"] }
 log = { workspace = true, features = ["max_level_debug", "release_max_level_warn"] }
+ordered-float = { workspace = true, features = ["std"] }
 tracing = { workspace = true, features = ["max_level_debug", "release_max_level_warn"] }
 woodpecker_ui = { workspace = true, features = [], optional = true }
 
