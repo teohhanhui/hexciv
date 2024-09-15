@@ -18,6 +18,7 @@ fastlem-random-terrain = { workspace = true, features = [] }
 fastrand = { workspace = true, features = ["js", "std"] }
 fastrand-contrib = { workspace = true, features = ["std"] }
 itertools = { workspace = true, features = ["use_std"] }
+leafwing-input-manager = { workspace = true, features = ["asset", "keyboard", "mouse"] }
 log = { workspace = true, features = ["max_level_debug", "release_max_level_warn"] }
 ordered-float = { workspace = true, features = ["std"] }
 tracing = { workspace = true, features = ["max_level_debug", "release_max_level_warn"] }
@@ -28,5 +29,5 @@ bevy = { workspace = true, features = ["bevy_dev_tools", "dynamic_linking"] }
 
 [features]
 default = ["bevy_ui"]
-bevy_ui = ["bevy/bevy_text", "bevy/bevy_ui"]
+bevy_ui = ["bevy/bevy_text", "bevy/bevy_ui", "leafwing-input-manager/ui"]
 woodpecker_ui = ["bevy/webgpu", "dep:woodpecker_ui"]

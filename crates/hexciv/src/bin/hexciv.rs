@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use bevy::color::palettes;
+use bevy::ecs::system::{RunSystemOnce, SystemState};
 use bevy::prelude::*;
 use bevy_ecs_tilemap::prelude::*;
 use bevy_pancam::{PanCam, PanCamPlugin};
@@ -9,6 +10,8 @@ use fastlem_random_terrain::{generate_terrain, Site2D, Terrain2D};
 use fastrand_contrib::RngExt as _;
 use helpers::hex_grid::neighbors::{HexNeighbors, HEX_DIRECTIONS};
 use itertools::{chain, repeat_n, Itertools as _};
+use leafwing_input_manager::common_conditions::action_toggle_active;
+use leafwing_input_manager::prelude::*;
 use ordered_float::NotNan;
 
 // IMPORTANT: The map's dimensions must both be even numbers, due to the
@@ -160,6 +163,11 @@ struct GameRng(fastrand::Rng);
 #[derive(Resource)]
 struct MapTerrain(Terrain2D);
 
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Actionlike, Reflect)]
+enum DebugAction {
+    ShowTileLabels,
+}
+
 #[derive(Resource)]
 struct CursorPos(Vec2);
 
@@ -220,6 +228,17 @@ impl FromWorld for GameRng {
     }
 }
 
+impl DebugAction {
+    fn mkb_input_map() -> InputMap<Self> {
+        let mut input_map = InputMap::default();
+        input_map.insert(
+            DebugAction::ShowTileLabels,
+            ModifierKey::Control.with(KeyCode::KeyI),
+        );
+        input_map
+    }
+}
+
 impl Default for CursorPos {
     fn default() -> Self {
         // Initialize the cursor pos at some far away place. It will get updated
@@ -253,12 +272,15 @@ fn main() {
                 })
                 .set(ImagePlugin::default_nearest()),
         )
+        .add_plugins(InputManagerPlugin::<DebugAction>::default())
         .add_plugins(PanCamPlugin)
         .add_plugins(TilemapPlugin)
         .init_resource::<FontHandle>()
         .init_resource::<MapRng>()
         .init_resource::<GameRng>()
+        .init_resource::<ActionState<DebugAction>>()
         .init_resource::<CursorPos>()
+        .insert_resource(DebugAction::mkb_input_map())
         .add_systems(
             Startup,
             (spawn_tilemap, post_spawn_tilemap)
@@ -266,7 +288,18 @@ fn main() {
                 .in_set(SpawnTilemapSet),
         )
         .add_systems(Startup, spawn_starting_units.after(SpawnTilemapSet))
-        .add_systems(Startup, spawn_tile_labels.after(SpawnTilemapSet))
+        .add_systems(
+            Update,
+            show_tile_labels
+                .before(highlight_tile_labels)
+                .run_if(action_toggle_active(false, DebugAction::ShowTileLabels)),
+        )
+        .add_systems(
+            Update,
+            hide_tile_labels
+                .before(highlight_tile_labels)
+                .run_if(action_toggle_active(true, DebugAction::ShowTileLabels)),
+        )
         .add_systems(Update, (update_cursor_pos, highlight_tile_labels).chain())
         .run();
 }
@@ -854,6 +887,38 @@ fn spawn_starting_units(
         .insert(LandMilitaryUnitLayer);
 }
 
+#[allow(clippy::type_complexity)]
+fn show_tile_labels(
+    world: &mut World,
+    tile_label_query: &mut QueryState<(), With<TileLabel>>,
+    system_state: &mut SystemState<(Query<&TileLabel>, Query<&mut Visibility, With<Text>>)>,
+) {
+    if tile_label_query.iter(world).next().is_none() {
+        world.run_system_once(spawn_tile_labels);
+    }
+
+    {
+        let (tile_label_query, mut text_query) = system_state.get_mut(world);
+
+        for tile_label in tile_label_query.iter() {
+            if let Ok(mut visibility) = text_query.get_mut(tile_label.0) {
+                *visibility = Visibility::Visible;
+            }
+        }
+    }
+}
+
+fn hide_tile_labels(
+    tile_label_query: Query<&TileLabel>,
+    mut text_query: Query<&mut Visibility, With<Text>>,
+) {
+    for tile_label in tile_label_query.iter() {
+        if let Ok(mut visibility) = text_query.get_mut(tile_label.0) {
+            *visibility = Visibility::Hidden;
+        }
+    }
+}
+
 /// Generates tile position labels.
 fn spawn_tile_labels(
     mut commands: Commands,
@@ -886,7 +951,6 @@ fn spawn_tile_labels(
                 )
                 .with_justify(text_justify),
                 transform,
-                visibility: Visibility::Hidden,
                 ..Default::default()
             })
             .id();
@@ -931,16 +995,15 @@ fn highlight_tile_labels(
     >,
     highlighted_tiles_query: Query<Entity, With<HighlightedLabel>>,
     tile_label_query: Query<&TileLabel>,
-    mut text_query: Query<(&mut Text, &mut Visibility)>,
+    mut text_query: Query<&mut Text>,
 ) {
     // Un-highlight any previously highlighted tile labels.
     for highlighted_tile_entity in highlighted_tiles_query.iter() {
         if let Ok(label) = tile_label_query.get(highlighted_tile_entity) {
-            if let Ok((mut tile_text, mut visibility)) = text_query.get_mut(label.0) {
+            if let Ok(mut tile_text) = text_query.get_mut(label.0) {
                 for section in tile_text.sections.iter_mut() {
                     section.style.color = Color::BLACK;
                 }
-                *visibility = Visibility::Hidden;
                 commands
                     .entity(highlighted_tile_entity)
                     .remove::<HighlightedLabel>();
@@ -968,11 +1031,10 @@ fn highlight_tile_labels(
         // Highlight the relevant tile's label
         if let Some(tile_entity) = tile_storage.get(&tile_pos) {
             if let Ok(label) = tile_label_query.get(tile_entity) {
-                if let Ok((mut tile_text, mut visibility)) = text_query.get_mut(label.0) {
+                if let Ok(mut tile_text) = text_query.get_mut(label.0) {
                     for section in tile_text.sections.iter_mut() {
                         section.style.color = palettes::tailwind::RED_600.into();
                     }
-                    *visibility = Visibility::Visible;
                     commands.entity(tile_entity).insert(HighlightedLabel);
                 }
             }

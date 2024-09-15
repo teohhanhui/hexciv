@@ -21,6 +21,7 @@ fastlem-random-terrain = { path = "crates/fastlem-random-terrain", default-featu
 fastrand = { version = "2.1.1", default-features = false }
 fastrand-contrib = { version = "0.1.0", default-features = false }
 itertools = { version = "0.13.0", default-features = false }
+leafwing-input-manager = { version = "0.15.0", default-features = false }
 log = { version = "0.4.22", default-features = false }
 noise = { version = "0.9.0", default-features = false }
 ordered-float = { version = "4.2.2", default-features = false }
@@ -36,6 +37,7 @@ bevy_ecs_tilemap = { git = "https://github.com/teohhanhui/bevy_ecs_tilemap", bra
 bevy_eventlistener = { git = "https://github.com/StarArawn/bevy_eventlistener", branch = "main" }
 bevy_mod_picking = { git = "https://github.com/StarArawn/bevy_mod_picking", branch = "main" }
 bevy_vello = { git = "https://github.com/linebender/bevy_vello", rev = "7fe648ccb9766ecf2ef469f08c9f21093c3544e6" }
+leafwing-input-manager = { git = "https://github.com/Leafwing-Studios/leafwing-input-manager", branch = "main" }
 
 # Enable a small amount of optimization in the dev profile.
 [profile.dev]
