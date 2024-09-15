@@ -120,6 +120,13 @@ enum BaseTerrainVariant {
     Mountains = 10,
 }
 
+#[derive(Copy, Clone, Eq, PartialEq)]
+#[repr(u32)]
+enum LandMilitaryUnit {
+    Settler = 0,
+    // Warrior = 1,
+}
+
 type RiverEdges = BitArr!(for 6, in u16);
 
 #[derive(Copy, Clone)]
@@ -148,6 +155,9 @@ struct FontHandle(Handle<Font>);
 struct MapRng(fastrand::Rng);
 
 #[derive(Resource)]
+struct GameRng(fastrand::Rng);
+
+#[derive(Resource)]
 struct MapTerrain(Terrain2D);
 
 #[derive(Resource)]
@@ -165,6 +175,10 @@ struct RiverLayer;
 #[derive(Component)]
 struct TerrainFeaturesLayer;
 
+/// Marker for the land military unit layer tilemap.
+#[derive(Component)]
+struct LandMilitaryUnitLayer;
+
 #[derive(Component)]
 struct TileLabel(Entity);
 
@@ -175,12 +189,12 @@ struct HighlightedLabel;
 struct SpawnTilemapSet;
 
 impl EarthLatitude {
-    pub fn latitude(&self) -> NotNan<f64> {
+    pub const fn latitude(&self) -> f64 {
         match self {
-            EarthLatitude::ArticCirle => NotNan::new(66.57).unwrap(),
-            EarthLatitude::TropicOfCancer => NotNan::new(23.43).unwrap(),
-            EarthLatitude::TropicOfCapricorn => NotNan::new(-23.43).unwrap(),
-            EarthLatitude::AntarcticCircle => NotNan::new(-66.57).unwrap(),
+            EarthLatitude::ArticCirle => 66.57,
+            EarthLatitude::TropicOfCancer => 23.43,
+            EarthLatitude::TropicOfCapricorn => -23.43,
+            EarthLatitude::AntarcticCircle => -66.57,
         }
     }
 }
@@ -193,6 +207,13 @@ impl FromWorld for FontHandle {
 }
 
 impl FromWorld for MapRng {
+    fn from_world(_world: &mut World) -> Self {
+        let rng = fastrand::Rng::new();
+        Self(rng)
+    }
+}
+
+impl FromWorld for GameRng {
     fn from_world(_world: &mut World) -> Self {
         let rng = fastrand::Rng::new();
         Self(rng)
@@ -215,6 +236,10 @@ impl TerrainFeaturesLayer {
     const Z_INDEX: f32 = 2.0;
 }
 
+impl LandMilitaryUnitLayer {
+    const Z_INDEX: f32 = 4.0;
+}
+
 fn main() {
     App::new()
         .add_plugins(
@@ -232,6 +257,7 @@ fn main() {
         .add_plugins(TilemapPlugin)
         .init_resource::<FontHandle>()
         .init_resource::<MapRng>()
+        .init_resource::<GameRng>()
         .init_resource::<CursorPos>()
         .add_systems(
             Startup,
@@ -239,6 +265,7 @@ fn main() {
                 .chain()
                 .in_set(SpawnTilemapSet),
         )
+        .add_systems(Startup, spawn_starting_units.after(SpawnTilemapSet))
         .add_systems(Startup, spawn_tile_labels.after(SpawnTilemapSet))
         .add_systems(Update, (update_cursor_pos, highlight_tile_labels).chain())
         .run();
@@ -492,11 +519,7 @@ fn post_spawn_tilemap(
     >,
     mut base_terrain_tile_query: Query<
         &mut TileTextureIndex,
-        (
-            With<BaseTerrainLayer>,
-            Without<RiverLayer>,
-            Without<TerrainFeaturesLayer>,
-        ),
+        (With<BaseTerrainLayer>, Without<TerrainFeaturesLayer>),
     >,
 ) {
     let rng = &mut map_rng.0;
@@ -548,8 +571,8 @@ fn post_spawn_tilemap(
                     + NotNan::new(180.0).unwrap()
                         * ((NotNan::from(tile_pos.y) + 0.5) / NotNan::from(map_size.y));
 
-                if (latitude >= EarthLatitude::ArticCirle.latitude()
-                    || latitude <= EarthLatitude::AntarcticCircle.latitude())
+                if (*latitude >= EarthLatitude::ArticCirle.latitude()
+                    || *latitude <= EarthLatitude::AntarcticCircle.latitude())
                     && rng.choice(ICE_CHOICES).unwrap()
                 {
                     let tile_entity = commands
@@ -700,6 +723,106 @@ fn post_spawn_tilemap(
     }
 }
 
+#[allow(clippy::type_complexity)]
+fn spawn_starting_units(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    mut game_rng: ResMut<GameRng>,
+    base_terrain_tilemap_query: Query<
+        (&TilemapSize, &TileStorage),
+        (
+            With<BaseTerrainLayer>,
+            Without<RiverLayer>,
+            Without<TerrainFeaturesLayer>,
+        ),
+    >,
+    base_terrain_tile_query: Query<
+        &TileTextureIndex,
+        (
+            With<BaseTerrainLayer>,
+            Without<RiverLayer>,
+            Without<TerrainFeaturesLayer>,
+        ),
+    >,
+) {
+    let image_handles = vec![
+        asset_server.load("units/settler.png"),
+        // TODO: warrior
+        asset_server.load("tiles/transparent.png"),
+    ];
+    let texture_vec = TilemapTexture::Vector(image_handles);
+
+    let rng = &mut game_rng.0;
+    info!(seed = rng.get_seed(), "game seed");
+
+    let (map_size, base_terrain_tile_storage) = base_terrain_tilemap_query.get_single().unwrap();
+
+    let mut allowable_starting_positions = Vec::new();
+
+    for x in 0..map_size.x {
+        for y in 0..map_size.y {
+            let tile_pos = TilePos { x, y };
+            let tile_entity = base_terrain_tile_storage.get(&tile_pos).unwrap();
+            let tile_texture = *base_terrain_tile_query.get(tile_entity).unwrap();
+
+            if [
+                // TODO: Maori starts in the ocean.
+                BaseTerrain::Ocean as u32,
+                BaseTerrain::Coast as u32,
+                // Exclude impassable tiles.
+                BaseTerrain::Plains as u32 + BaseTerrainVariant::Mountains as u32,
+                BaseTerrain::Grassland as u32 + BaseTerrainVariant::Mountains as u32,
+                BaseTerrain::Desert as u32 + BaseTerrainVariant::Mountains as u32,
+                BaseTerrain::Tundra as u32 + BaseTerrainVariant::Mountains as u32,
+                BaseTerrain::Snow as u32 + BaseTerrainVariant::Mountains as u32,
+            ]
+            .contains(&tile_texture.0)
+            {
+                continue;
+            }
+
+            allowable_starting_positions.push(tile_pos);
+        }
+    }
+
+    let mut tile_storage = TileStorage::empty(*map_size);
+    let tilemap_entity = commands.spawn_empty().id();
+    let tilemap_id = TilemapId(tilemap_entity);
+
+    let settler_tile_pos = rng
+        .choice(allowable_starting_positions)
+        .expect("the map should have enough land tiles");
+
+    // Spawn settler.
+    {
+        let tile_entity = commands
+            .spawn(TileBundle {
+                position: settler_tile_pos,
+                tilemap_id,
+                texture_index: TileTextureIndex(LandMilitaryUnit::Settler as u32),
+                ..Default::default()
+            })
+            .insert(LandMilitaryUnitLayer)
+            .id();
+        tile_storage.set(&settler_tile_pos, tile_entity);
+    }
+
+    commands
+        .entity(tilemap_entity)
+        .insert(TilemapBundle {
+            grid_size: GRID_SIZE,
+            size: *map_size,
+            storage: tile_storage,
+            texture: texture_vec,
+            tile_size: TILE_SIZE,
+            map_type: MAP_TYPE,
+            transform: get_tilemap_center_transform(map_size, &GRID_SIZE, &MAP_TYPE, 0.0)
+                * Transform::from_xyz(0.0, 0.0, LandMilitaryUnitLayer::Z_INDEX),
+            ..Default::default()
+        })
+        .insert(LandMilitaryUnitLayer);
+}
+
 /// Generates tile position labels.
 fn spawn_tile_labels(
     mut commands: Commands,
@@ -827,14 +950,14 @@ fn highlight_tile_labels(
 }
 
 fn choose_base_terrain_by_latitude(rng: &mut fastrand::Rng, latitude: NotNan<f64>) -> BaseTerrain {
-    if latitude >= EarthLatitude::ArticCirle.latitude()
-        || latitude <= EarthLatitude::AntarcticCircle.latitude()
+    if *latitude >= EarthLatitude::ArticCirle.latitude()
+        || *latitude <= EarthLatitude::AntarcticCircle.latitude()
     {
         rng.choice(FRIGID_ZONE_TILE_CHOICES).unwrap()
-    } else if latitude >= NotNan::new(35.0).unwrap() || latitude <= NotNan::new(-35.0).unwrap() {
+    } else if *latitude >= 35.0 || *latitude <= -35.0 {
         rng.choice(TEMPERATE_ZONE_TILE_CHOICES).unwrap()
-    } else if latitude >= EarthLatitude::TropicOfCancer.latitude()
-        || latitude <= EarthLatitude::TropicOfCapricorn.latitude()
+    } else if *latitude >= EarthLatitude::TropicOfCancer.latitude()
+        || *latitude <= EarthLatitude::TropicOfCapricorn.latitude()
     {
         rng.choice(SUBTROPICS_TILE_CHOICES).unwrap()
     } else {
