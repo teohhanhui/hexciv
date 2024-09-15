@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use bevy::color::palettes;
 use bevy::prelude::*;
@@ -124,7 +124,7 @@ enum BaseTerrainVariant {
 #[repr(u32)]
 enum LandMilitaryUnit {
     Settler = 0,
-    // Warrior = 1,
+    Warrior = 1,
 }
 
 type RiverEdges = BitArr!(for 6, in u16);
@@ -747,8 +747,7 @@ fn spawn_starting_units(
 ) {
     let image_handles = vec![
         asset_server.load("units/settler.png"),
-        // TODO: warrior
-        asset_server.load("tiles/transparent.png"),
+        asset_server.load("units/warrior.png"),
     ];
     let texture_vec = TilemapTexture::Vector(image_handles);
 
@@ -757,7 +756,7 @@ fn spawn_starting_units(
 
     let (map_size, base_terrain_tile_storage) = base_terrain_tilemap_query.get_single().unwrap();
 
-    let mut allowable_starting_positions = Vec::new();
+    let mut allowable_starting_positions = HashSet::new();
 
     for x in 0..map_size.x {
         for y in 0..map_size.y {
@@ -769,7 +768,7 @@ fn spawn_starting_units(
                 // TODO: Maori starts in the ocean.
                 BaseTerrain::Ocean as u32,
                 BaseTerrain::Coast as u32,
-                // Exclude impassable tiles.
+                // Exclude mountains.
                 BaseTerrain::Plains as u32 + BaseTerrainVariant::Mountains as u32,
                 BaseTerrain::Grassland as u32 + BaseTerrainVariant::Mountains as u32,
                 BaseTerrain::Desert as u32 + BaseTerrainVariant::Mountains as u32,
@@ -781,17 +780,35 @@ fn spawn_starting_units(
                 continue;
             }
 
-            allowable_starting_positions.push(tile_pos);
+            allowable_starting_positions.insert(tile_pos);
         }
+    }
+
+    let mut settler_tile_pos;
+    let warrior_tile_pos;
+    loop {
+        settler_tile_pos = *rng
+            .choice(&allowable_starting_positions)
+            .expect("the map should have enough land tiles");
+        let neighbor_positions: HashSet<_> =
+            HexNeighbors::get_neighboring_positions_row_odd(&settler_tile_pos, map_size)
+                .iter()
+                .copied()
+                .collect();
+        let allowable_neighbors: HashSet<_> = neighbor_positions
+            .intersection(&allowable_starting_positions)
+            .copied()
+            .collect();
+        if allowable_neighbors.is_empty() {
+            continue;
+        }
+        warrior_tile_pos = *rng.choice(&allowable_neighbors).unwrap();
+        break;
     }
 
     let mut tile_storage = TileStorage::empty(*map_size);
     let tilemap_entity = commands.spawn_empty().id();
     let tilemap_id = TilemapId(tilemap_entity);
-
-    let settler_tile_pos = rng
-        .choice(allowable_starting_positions)
-        .expect("the map should have enough land tiles");
 
     // Spawn settler.
     {
@@ -800,6 +817,20 @@ fn spawn_starting_units(
                 position: settler_tile_pos,
                 tilemap_id,
                 texture_index: TileTextureIndex(LandMilitaryUnit::Settler as u32),
+                ..Default::default()
+            })
+            .insert(LandMilitaryUnitLayer)
+            .id();
+        tile_storage.set(&settler_tile_pos, tile_entity);
+    }
+
+    // Spawn warrior.
+    {
+        let tile_entity = commands
+            .spawn(TileBundle {
+                position: warrior_tile_pos,
+                tilemap_id,
+                texture_index: TileTextureIndex(LandMilitaryUnit::Warrior as u32),
                 ..Default::default()
             })
             .insert(LandMilitaryUnitLayer)
