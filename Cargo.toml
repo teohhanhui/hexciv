@@ -25,6 +25,7 @@ leafwing-input-manager = { version = "0.15.0", default-features = false }
 log = { version = "0.4.22", default-features = false }
 noise = { version = "0.9.0", default-features = false }
 ordered-float = { version = "4.2.2", default-features = false }
+strum = { version = "0.26.3", default-features = false }
 terrain-graph = { version = "1.0.1", default-features = false }
 tracing = { version = "0.1.40", default-features = false }
 woodpecker_ui = { git = "https://github.com/StarArawn/woodpecker_ui", default-features = false }

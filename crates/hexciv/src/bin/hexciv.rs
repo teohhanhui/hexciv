@@ -3,16 +3,18 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use bevy::color::palettes;
 use bevy::ecs::system::{RunSystemOnce, SystemState};
 use bevy::prelude::*;
+use bevy_ecs_tilemap::helpers::hex_grid::neighbors::{HexNeighbors, HEX_DIRECTIONS};
 use bevy_ecs_tilemap::prelude::*;
 use bevy_pancam::{PanCam, PanCamPlugin};
 use bitvec::prelude::*;
 use fastlem_random_terrain::{generate_terrain, Site2D, Terrain2D};
 use fastrand_contrib::RngExt as _;
-use helpers::hex_grid::neighbors::{HexNeighbors, HEX_DIRECTIONS};
+use hexciv::types::Civilization;
 use itertools::{chain, repeat_n, Itertools as _};
 use leafwing_input_manager::common_conditions::action_toggle_active;
 use leafwing_input_manager::prelude::*;
 use ordered_float::NotNan;
+use strum::VariantArray;
 
 // IMPORTANT: The map's dimensions must both be even numbers, due to the
 // assumptions being made in our calculations.
@@ -112,6 +114,16 @@ enum BaseTerrain {
     Desert = 2,
     Tundra = 3,
     Snow = 4,
+    // PlainsHills = 5,
+    // GrasslandHills = 6,
+    // DesertHills = 7,
+    // TundraHills = 8,
+    // SnowHills = 9,
+    // PlainsMountains = 10,
+    // GrasslandMountains = 11,
+    // DesertMountains = 12,
+    // TundraMountains = 13,
+    // SnowMountains = 14,
     Coast = 15,
     Ocean = 16,
 }
@@ -123,16 +135,9 @@ enum BaseTerrainVariant {
     Mountains = 10,
 }
 
-#[derive(Copy, Clone, Eq, PartialEq)]
-#[repr(u32)]
-enum LandMilitaryUnit {
-    Settler = 0,
-    Warrior = 1,
-}
-
 type RiverEdges = BitArr!(for 6, in u16);
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Eq, PartialEq)]
 #[repr(u32)]
 enum TerrainFeatures {
     // Woods = 0,
@@ -140,8 +145,21 @@ enum TerrainFeatures {
     // Marsh = 2,
     // Floodplains = 3,
     Oasis = 4,
-    // Reef = 5,
+    // Cliffs = 5,
     Ice = 6,
+}
+
+#[derive(Copy, Clone, Eq, PartialEq)]
+#[repr(u32)]
+enum UnitState {
+    Ready = 0,
+}
+
+#[derive(Copy, Clone, Eq, PartialEq)]
+#[repr(u32)]
+enum LandMilitaryUnit {
+    Settler = 0,
+    Warrior = 1,
 }
 
 enum EarthLatitude {
@@ -182,6 +200,10 @@ struct RiverLayer;
 /// Marker for the terrain features layer tilemap.
 #[derive(Component)]
 struct TerrainFeaturesLayer;
+
+/// Marker for the unit state layer tilemap.
+#[derive(Component)]
+struct UnitStateLayer;
 
 /// Marker for the land military unit layer tilemap.
 #[derive(Component)]
@@ -255,8 +277,12 @@ impl TerrainFeaturesLayer {
     const Z_INDEX: f32 = 2.0;
 }
 
-impl LandMilitaryUnitLayer {
+impl UnitStateLayer {
     const Z_INDEX: f32 = 4.0;
+}
+
+impl LandMilitaryUnitLayer {
+    const Z_INDEX: f32 = 5.0;
 }
 
 fn main() {
@@ -398,14 +424,14 @@ fn spawn_tilemap(
                     + NotNan::new(180.0).unwrap()
                         * ((NotNan::from(tile_pos.y) + 0.5) / NotNan::from(map_size.y));
 
-                let choice = choose_base_terrain_by_latitude(rng, latitude);
+                let base_terrain = choose_base_terrain_by_latitude(rng, latitude);
 
                 TileTextureIndex(if elevation >= NotNan::new(25.0).unwrap() {
-                    choice as u32 + BaseTerrainVariant::Mountains as u32
+                    base_terrain as u32 + BaseTerrainVariant::Mountains as u32
                 } else if elevation >= NotNan::new(5.0).unwrap() {
-                    choice as u32 + BaseTerrainVariant::Hills as u32
+                    base_terrain as u32 + BaseTerrainVariant::Hills as u32
                 } else {
-                    choice as u32
+                    base_terrain as u32
                 })
             };
             let tile_entity = commands
@@ -493,7 +519,7 @@ fn spawn_tilemap(
         // TODO: floodplains
         asset_server.load("tiles/transparent.png"),
         asset_server.load("tiles/oasis.png"),
-        // TODO: reef
+        // TODO: cliffs
         asset_server.load("tiles/transparent.png"),
         asset_server.load("tiles/ice.png"),
     ];
@@ -778,16 +804,21 @@ fn spawn_starting_units(
         ),
     >,
 ) {
+    let image_handles = vec![asset_server.load("units/ready.png")];
+    let unit_state_texture_vec = TilemapTexture::Vector(image_handles);
+
     let image_handles = vec![
         asset_server.load("units/settler.png"),
         asset_server.load("units/warrior.png"),
     ];
-    let texture_vec = TilemapTexture::Vector(image_handles);
+    let land_military_unit_texture_vec = TilemapTexture::Vector(image_handles);
 
     let rng = &mut game_rng.0;
     info!(seed = rng.get_seed(), "game seed");
 
     let (map_size, base_terrain_tile_storage) = base_terrain_tilemap_query.get_single().unwrap();
+
+    let civ = rng.choice(Civilization::VARIANTS).unwrap();
 
     let mut allowable_starting_positions = HashSet::new();
 
@@ -798,7 +829,6 @@ fn spawn_starting_units(
             let tile_texture = *base_terrain_tile_query.get(tile_entity).unwrap();
 
             if [
-                // TODO: Maori starts in the ocean.
                 BaseTerrain::Ocean as u32,
                 BaseTerrain::Coast as u32,
                 // Exclude mountains.
@@ -839,22 +869,35 @@ fn spawn_starting_units(
         break;
     }
 
-    let mut tile_storage = TileStorage::empty(*map_size);
-    let tilemap_entity = commands.spawn_empty().id();
-    let tilemap_id = TilemapId(tilemap_entity);
+    let mut unit_state_tile_storage = TileStorage::empty(*map_size);
+    let unit_state_tilemap_entity = commands.spawn_empty().id();
+    let mut land_military_unit_tile_storage = TileStorage::empty(*map_size);
+    let land_military_unit_tilemap_entity = commands.spawn_empty().id();
 
     // Spawn settler.
     {
         let tile_entity = commands
             .spawn(TileBundle {
                 position: settler_tile_pos,
-                tilemap_id,
+                tilemap_id: TilemapId(unit_state_tilemap_entity),
+                texture_index: TileTextureIndex(UnitState::Ready as u32),
+                color: TileColor(civ.colors()[0].into()),
+                ..Default::default()
+            })
+            .insert(UnitStateLayer)
+            .id();
+        unit_state_tile_storage.set(&settler_tile_pos, tile_entity);
+        let tile_entity = commands
+            .spawn(TileBundle {
+                position: settler_tile_pos,
+                tilemap_id: TilemapId(land_military_unit_tilemap_entity),
                 texture_index: TileTextureIndex(LandMilitaryUnit::Settler as u32),
+                color: TileColor(civ.colors()[1].into()),
                 ..Default::default()
             })
             .insert(LandMilitaryUnitLayer)
             .id();
-        tile_storage.set(&settler_tile_pos, tile_entity);
+        land_military_unit_tile_storage.set(&settler_tile_pos, tile_entity);
     }
 
     // Spawn warrior.
@@ -862,22 +905,49 @@ fn spawn_starting_units(
         let tile_entity = commands
             .spawn(TileBundle {
                 position: warrior_tile_pos,
-                tilemap_id,
+                tilemap_id: TilemapId(unit_state_tilemap_entity),
+                texture_index: TileTextureIndex(UnitState::Ready as u32),
+                color: TileColor(civ.colors()[0].into()),
+                ..Default::default()
+            })
+            .insert(UnitStateLayer)
+            .id();
+        unit_state_tile_storage.set(&warrior_tile_pos, tile_entity);
+        let tile_entity = commands
+            .spawn(TileBundle {
+                position: warrior_tile_pos,
+                tilemap_id: TilemapId(land_military_unit_tilemap_entity),
                 texture_index: TileTextureIndex(LandMilitaryUnit::Warrior as u32),
+                color: TileColor(civ.colors()[1].into()),
                 ..Default::default()
             })
             .insert(LandMilitaryUnitLayer)
             .id();
-        tile_storage.set(&settler_tile_pos, tile_entity);
+        land_military_unit_tile_storage.set(&settler_tile_pos, tile_entity);
     }
 
     commands
-        .entity(tilemap_entity)
+        .entity(unit_state_tilemap_entity)
         .insert(TilemapBundle {
             grid_size: GRID_SIZE,
             size: *map_size,
-            storage: tile_storage,
-            texture: texture_vec,
+            storage: unit_state_tile_storage,
+            texture: unit_state_texture_vec,
+            tile_size: TILE_SIZE,
+            map_type: MAP_TYPE,
+            transform: get_tilemap_center_transform(map_size, &GRID_SIZE, &MAP_TYPE, 0.0)
+                * Transform::from_xyz(0.0, 0.0, UnitStateLayer::Z_INDEX),
+            ..Default::default()
+        })
+        .insert(UnitStateLayer);
+
+    commands
+        .entity(land_military_unit_tilemap_entity)
+        .insert(TilemapBundle {
+            grid_size: GRID_SIZE,
+            size: *map_size,
+            storage: land_military_unit_tile_storage,
+            texture: land_military_unit_texture_vec,
             tile_size: TILE_SIZE,
             map_type: MAP_TYPE,
             transform: get_tilemap_center_transform(map_size, &GRID_SIZE, &MAP_TYPE, 0.0)
