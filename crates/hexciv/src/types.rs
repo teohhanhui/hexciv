@@ -1,3 +1,3 @@
-pub use self::civilizations::Civilization;
+pub use self::civilization::Civilization;
 
-mod civilizations;
+mod civilization;

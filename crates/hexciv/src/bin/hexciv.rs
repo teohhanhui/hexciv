@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use bevy::color::palettes;
-use bevy::ecs::system::{RunSystemOnce, SystemState};
+use bevy::ecs::system::{RunSystemOnce as _, SystemState};
 use bevy::prelude::*;
 use bevy_ecs_tilemap::helpers::hex_grid::neighbors::{HexNeighbors, HEX_DIRECTIONS};
 use bevy_ecs_tilemap::prelude::*;
@@ -9,12 +9,13 @@ use bevy_pancam::{PanCam, PanCamPlugin};
 use bitvec::prelude::*;
 use fastlem_random_terrain::{generate_terrain, Site2D, Terrain2D};
 use fastrand_contrib::RngExt as _;
+use hexciv::states::TurnState;
 use hexciv::types::Civilization;
 use itertools::{chain, repeat_n, Itertools as _};
 use leafwing_input_manager::common_conditions::action_toggle_active;
 use leafwing_input_manager::prelude::*;
 use ordered_float::NotNan;
-use strum::VariantArray;
+use strum::VariantArray as _;
 
 // IMPORTANT: The map's dimensions must both be even numbers, due to the
 // assumptions being made in our calculations.
@@ -307,6 +308,7 @@ fn main() {
         .init_resource::<ActionState<DebugAction>>()
         .init_resource::<CursorPos>()
         .insert_resource(DebugAction::mkb_input_map())
+        .init_state::<TurnState>()
         .add_systems(
             Startup,
             (spawn_tilemap, post_spawn_tilemap)
@@ -314,6 +316,7 @@ fn main() {
                 .in_set(SpawnTilemapSet),
         )
         .add_systems(Startup, spawn_starting_units.after(SpawnTilemapSet))
+        .add_systems(OnEnter(TurnState::Playing), focus_camera_at_turn_start)
         .add_systems(
             Update,
             show_tile_labels
@@ -340,6 +343,14 @@ fn spawn_tilemap(
         grab_buttons: vec![MouseButton::Left],
         min_scale: 1.0,
         max_scale: 10.0,
+        min_x: -((MAP_SIDE_LENGTH_X - 1) as f64 * CENTER_TO_CENTER_X
+            + GRID_SIZE.x as f64
+            + ODD_ROW_OFFSET) as f32,
+        max_x: ((MAP_SIDE_LENGTH_X - 1) as f64 * CENTER_TO_CENTER_X
+            + GRID_SIZE.x as f64
+            + ODD_ROW_OFFSET) as f32,
+        min_y: -((MAP_SIDE_LENGTH_Y - 1) as f64 * CENTER_TO_CENTER_Y + GRID_SIZE.y as f64) as f32,
+        max_y: ((MAP_SIDE_LENGTH_Y - 1) as f64 * CENTER_TO_CENTER_Y + GRID_SIZE.y as f64) as f32,
         ..Default::default()
     });
 
@@ -786,6 +797,7 @@ fn post_spawn_tilemap(
 fn spawn_starting_units(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
+    mut next_turn_state: ResMut<NextState<TurnState>>,
     mut game_rng: ResMut<GameRng>,
     base_terrain_tilemap_query: Query<
         (&TilemapSize, &TileStorage),
@@ -955,6 +967,32 @@ fn spawn_starting_units(
             ..Default::default()
         })
         .insert(LandMilitaryUnitLayer);
+
+    next_turn_state.set(TurnState::Playing);
+}
+
+#[allow(clippy::type_complexity)]
+fn focus_camera_at_turn_start(
+    mut camera_query: Query<&mut Transform, (With<Camera2d>, Without<UnitStateLayer>)>,
+    unit_state_tilemap_query: Query<
+        (&Transform, &TilemapType, &TilemapGridSize),
+        (With<UnitStateLayer>, Without<Camera2d>),
+    >,
+    unit_state_tile_query: Query<(&TilePos, &TileTextureIndex), With<UnitStateLayer>>,
+) {
+    let mut camera_transform = camera_query.get_single_mut().unwrap();
+    let (map_transform, map_type, grid_size) = unit_state_tilemap_query.get_single().unwrap();
+    for (tile_pos, tile_texture) in unit_state_tile_query.iter() {
+        if tile_texture.0 == UnitState::Ready as u32 {
+            let tile_center = tile_pos
+                .center_in_world(grid_size, map_type)
+                .extend(UnitStateLayer::Z_INDEX);
+            let tile_translation = map_transform.translation + tile_center;
+            info!(?tile_translation, "tile translation");
+            camera_transform.translation = tile_translation.with_z(camera_transform.translation.z);
+            break;
+        }
+    }
 }
 
 #[allow(clippy::type_complexity)]
