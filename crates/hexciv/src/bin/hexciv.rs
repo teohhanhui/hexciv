@@ -9,10 +9,14 @@ use bevy_pancam::{PanCam, PanCamPlugin};
 use bitvec::prelude::*;
 use fastlem_random_terrain::{generate_terrain, Site2D, Terrain2D};
 use fastrand_contrib::RngExt as _;
+#[cfg(debug_assertions)]
+use hexciv::actions::DebugAction;
+use hexciv::actions::GlobalAction;
 use hexciv::states::TurnState;
 use hexciv::types::Civilization;
+use indexmap::IndexSet;
 use itertools::{chain, repeat_n, Itertools as _};
-use leafwing_input_manager::common_conditions::action_toggle_active;
+use leafwing_input_manager::common_conditions::{action_just_pressed, action_toggle_active};
 use leafwing_input_manager::prelude::*;
 use ordered_float::NotNan;
 use strum::VariantArray as _;
@@ -76,6 +80,7 @@ const EXTENDED_VERTEX_OFFSETS: [(f32, f32); 6] = [
     (0.0, -GRID_SIZE.y),
 ];
 
+#[cfg(debug_assertions)]
 const TILE_LABEL_Z_INDEX: f32 = 3.0;
 
 const FRIGID_ZONE_TILE_CHOICES: [BaseTerrain; 2] = [BaseTerrain::Tundra, BaseTerrain::Snow];
@@ -188,11 +193,6 @@ struct GameRng(fastrand::Rng);
 #[derive(Resource)]
 struct MapTerrain(Terrain2D);
 
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Actionlike, Reflect)]
-enum DebugAction {
-    ShowTileLabels,
-}
-
 #[derive(Resource)]
 struct CursorPos(Vec2);
 
@@ -255,17 +255,6 @@ impl FromWorld for GameRng {
     }
 }
 
-impl DebugAction {
-    fn mkb_input_map() -> InputMap<Self> {
-        let mut input_map = InputMap::default();
-        input_map.insert(
-            DebugAction::ShowTileLabels,
-            ModifierKey::Control.with(KeyCode::KeyI),
-        );
-        input_map
-    }
-}
-
 impl Default for CursorPos {
     fn default() -> Self {
         // Initialize the cursor pos at some far away place. It will get updated
@@ -295,50 +284,74 @@ impl LandMilitaryUnitLayer {
 }
 
 fn main() {
-    App::new()
-        .add_plugins(
-            DefaultPlugins
-                .set(WindowPlugin {
-                    primary_window: Some(Window {
-                        title: "Hexciv".to_owned(),
-                        ..Default::default()
-                    }),
+    let mut app = App::new();
+    app.add_plugins(
+        DefaultPlugins
+            .set(WindowPlugin {
+                primary_window: Some(Window {
+                    title: "Hexciv".to_owned(),
                     ..Default::default()
-                })
-                .set(ImagePlugin::default_nearest()),
-        )
-        .add_plugins(InputManagerPlugin::<DebugAction>::default())
-        .add_plugins(PanCamPlugin)
-        .add_plugins(TilemapPlugin)
-        .init_resource::<FontHandle>()
-        .init_resource::<MapRng>()
-        .init_resource::<GameRng>()
-        .init_resource::<ActionState<DebugAction>>()
-        .init_resource::<CursorPos>()
-        .insert_resource(DebugAction::mkb_input_map())
-        .init_state::<TurnState>()
-        .add_systems(
-            Startup,
-            (spawn_tilemap, post_spawn_tilemap)
-                .chain()
-                .in_set(SpawnTilemapSet),
-        )
-        .add_systems(Startup, spawn_starting_units.after(SpawnTilemapSet))
-        .add_systems(OnEnter(TurnState::Playing), focus_camera_at_turn_start)
-        .add_systems(
-            Update,
-            show_tile_labels
-                .before(highlight_tile_labels)
-                .run_if(action_toggle_active(false, DebugAction::ShowTileLabels)),
-        )
-        .add_systems(
-            Update,
-            hide_tile_labels
-                .before(highlight_tile_labels)
-                .run_if(action_toggle_active(true, DebugAction::ShowTileLabels)),
-        )
-        .add_systems(Update, (update_cursor_pos, highlight_tile_labels).chain())
-        .run();
+                }),
+                ..Default::default()
+            })
+            .set(ImagePlugin::default_nearest()),
+    )
+    .add_plugins(InputManagerPlugin::<GlobalAction>::default())
+    .add_plugins(PanCamPlugin)
+    .add_plugins(TilemapPlugin)
+    .init_resource::<FontHandle>()
+    .init_resource::<MapRng>()
+    .init_resource::<GameRng>()
+    .init_resource::<ActionState<GlobalAction>>()
+    .init_resource::<CursorPos>()
+    .insert_resource(GlobalAction::input_map())
+    .init_state::<TurnState>()
+    .add_systems(
+        Startup,
+        (spawn_tilemap, post_spawn_tilemap)
+            .chain()
+            .in_set(SpawnTilemapSet),
+    )
+    .add_systems(Startup, spawn_starting_units.after(SpawnTilemapSet))
+    .add_systems(
+        OnEnter(TurnState::Playing),
+        (cycle_ready_unit, focus_camera_on_active_unit).chain(),
+    )
+    .add_systems(
+        Update,
+        (cycle_ready_unit, focus_camera_on_active_unit)
+            .chain()
+            .run_if(action_just_pressed(GlobalAction::PreviousReadyUnit)),
+    )
+    .add_systems(
+        Update,
+        (cycle_ready_unit, focus_camera_on_active_unit)
+            .chain()
+            .run_if(action_just_pressed(GlobalAction::NextReadyUnit)),
+    )
+    .add_systems(Update, update_cursor_pos);
+
+    #[cfg(debug_assertions)]
+    {
+        app.add_plugins(InputManagerPlugin::<DebugAction>::default())
+            .init_resource::<ActionState<DebugAction>>()
+            .insert_resource(DebugAction::input_map())
+            .add_systems(
+                Update,
+                (
+                    (
+                        show_tile_labels
+                            .run_if(action_toggle_active(false, DebugAction::ShowTileLabels)),
+                        hide_tile_labels
+                            .run_if(action_toggle_active(true, DebugAction::ShowTileLabels)),
+                    ),
+                    highlight_tile_labels.after(update_cursor_pos),
+                )
+                    .chain(),
+            );
+    }
+
+    app.run();
 }
 
 /// Generates the initial tilemap.
@@ -1003,45 +1016,119 @@ fn spawn_starting_units(
 }
 
 #[allow(clippy::type_complexity)]
-fn focus_camera_at_turn_start(
+fn cycle_ready_unit(
     mut commands: Commands,
-    mut camera_query: Query<&mut Transform, (With<Camera2d>, Without<UnitStateLayer>)>,
-    mut unit_selection_tilemap_query: Query<
-        (Entity, &mut TileStorage),
+    global_action_state: Res<ActionState<GlobalAction>>,
+    mut unit_selection_tilemap_query: Query<(Entity, &mut TileStorage), With<UnitSelectionLayer>>,
+    mut unit_selection_tile_query: Query<
+        (&mut TilePos, &TileTextureIndex),
         (With<UnitSelectionLayer>, Without<UnitStateLayer>),
-    >,
-    unit_state_tilemap_query: Query<
-        (&Transform, &TilemapType, &TilemapGridSize),
-        (
-            With<UnitStateLayer>,
-            Without<UnitSelectionLayer>,
-            Without<Camera2d>,
-        ),
     >,
     unit_state_tile_query: Query<
         (&TilePos, &TileTextureIndex),
         (With<UnitStateLayer>, Without<UnitSelectionLayer>),
     >,
 ) {
+    // TODO: Restrict to the units controlled by the current player.
+    let ready_unit_tile_positions: IndexSet<_> = unit_state_tile_query
+        .iter()
+        .filter_map(|(&tile_pos, &tile_texture)| {
+            if tile_texture.0 == UnitState::Ready as u32 {
+                Some(tile_pos)
+            } else {
+                None
+            }
+        })
+        .collect();
+    if ready_unit_tile_positions.is_empty() {
+        // There are no ready units to cycle to.
+        return;
+    }
+    let active_unit_tile_pos =
+        unit_selection_tile_query
+            .iter_mut()
+            .find_map(|(tile_pos, &tile_texture)| {
+                if tile_texture.0 == UnitSelection::Active as u32 {
+                    Some(tile_pos)
+                } else {
+                    None
+                }
+            });
+
+    if let Some(mut active_unit_tile_pos) = active_unit_tile_pos {
+        // Move the unit selection tile to the previous / next ready unit.
+
+        // TODO: Restrict to the units controlled by the current player.
+        let unit_tile_positions: Vec<_> = unit_state_tile_query
+            .iter()
+            .map(|(&tile_pos, _)| tile_pos)
+            .collect();
+
+        if global_action_state.just_pressed(&GlobalAction::PreviousReadyUnit) {
+            let previous_unit_tile_positions: IndexSet<_> = unit_tile_positions
+                .into_iter()
+                .rev()
+                .skip_while(|&tile_pos| tile_pos != *active_unit_tile_pos)
+                .skip(1)
+                .collect();
+            if let Some(tile_pos) = previous_unit_tile_positions
+                .intersection(&ready_unit_tile_positions)
+                .next()
+            {
+                *active_unit_tile_pos = *tile_pos;
+            }
+        } else if global_action_state.just_pressed(&GlobalAction::NextReadyUnit) {
+            let next_unit_tile_positions: IndexSet<_> = unit_tile_positions
+                .into_iter()
+                .skip_while(|&tile_pos| tile_pos != *active_unit_tile_pos)
+                .skip(1)
+                .collect();
+            if let Some(tile_pos) = next_unit_tile_positions
+                .intersection(&ready_unit_tile_positions)
+                .next()
+            {
+                *active_unit_tile_pos = *tile_pos;
+            }
+        } else {
+            // Not cycling units.
+            return;
+        }
+    } else {
+        // Spawn a new unit selection tile, since there was no currently active unit.
+
+        let (tilemap_entity, mut tile_storage) =
+            unit_selection_tilemap_query.get_single_mut().unwrap();
+
+        let tile_pos = ready_unit_tile_positions[0];
+        let tile_entity = commands
+            .spawn(TileBundle {
+                position: tile_pos,
+                tilemap_id: TilemapId(tilemap_entity),
+                texture_index: TileTextureIndex(UnitSelection::Active as u32),
+                ..Default::default()
+            })
+            .insert(UnitSelectionLayer)
+            .id();
+        tile_storage.set(&tile_pos, tile_entity);
+    }
+}
+
+#[allow(clippy::type_complexity)]
+fn focus_camera_on_active_unit(
+    mut camera_query: Query<&mut Transform, (With<Camera2d>, Without<UnitSelectionLayer>)>,
+    unit_selection_tilemap_query: Query<
+        (&Transform, &TilemapType, &TilemapGridSize),
+        (With<UnitSelectionLayer>, Without<Camera2d>),
+    >,
+    unit_selection_tile_query: Query<(&TilePos, &TileTextureIndex), With<UnitSelectionLayer>>,
+) {
     let mut camera_transform = camera_query.get_single_mut().unwrap();
-    let (map_transform, map_type, grid_size) = unit_state_tilemap_query.get_single().unwrap();
-    let (unit_selection_tilemap_entity, mut unit_selection_tile_storage) =
-        unit_selection_tilemap_query.get_single_mut().unwrap();
-    for (tile_pos, tile_texture) in unit_state_tile_query.iter() {
-        if tile_texture.0 == UnitState::Ready as u32 {
-            let unit_selection_tile_entity = commands
-                .spawn(TileBundle {
-                    position: *tile_pos,
-                    tilemap_id: TilemapId(unit_selection_tilemap_entity),
-                    texture_index: TileTextureIndex(UnitSelection::Active as u32),
-                    ..Default::default()
-                })
-                .insert(UnitSelectionLayer)
-                .id();
-            unit_selection_tile_storage.set(tile_pos, unit_selection_tile_entity);
+    let (map_transform, map_type, grid_size) = unit_selection_tilemap_query.get_single().unwrap();
+    for (tile_pos, tile_texture) in unit_selection_tile_query.iter() {
+        if tile_texture.0 == UnitSelection::Active as u32 {
             let tile_center = tile_pos
                 .center_in_world(grid_size, map_type)
-                .extend(UnitStateLayer::Z_INDEX);
+                .extend(UnitSelectionLayer::Z_INDEX);
             let tile_translation = map_transform.translation + tile_center;
             camera_transform.translation = tile_translation.with_z(camera_transform.translation.z);
             break;
@@ -1049,6 +1136,7 @@ fn focus_camera_at_turn_start(
     }
 }
 
+#[cfg(debug_assertions)]
 #[allow(clippy::type_complexity)]
 fn show_tile_labels(
     world: &mut World,
@@ -1070,6 +1158,7 @@ fn show_tile_labels(
     }
 }
 
+#[cfg(debug_assertions)]
 fn hide_tile_labels(
     tile_label_query: Query<&TileLabel>,
     mut text_query: Query<&mut Visibility, With<Text>>,
@@ -1082,6 +1171,7 @@ fn hide_tile_labels(
 }
 
 /// Generates tile position labels.
+#[cfg(debug_assertions)]
 fn spawn_tile_labels(
     mut commands: Commands,
     tilemap_query: Query<
@@ -1142,6 +1232,7 @@ fn update_cursor_pos(
 }
 
 /// Checks which tile the cursor is hovered over.
+#[cfg(debug_assertions)]
 fn highlight_tile_labels(
     mut commands: Commands,
     cursor_pos: Res<CursorPos>,

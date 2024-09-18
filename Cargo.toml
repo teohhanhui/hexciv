@@ -20,6 +20,7 @@ fastlem = { version = "0.1.4", default-features = false }
 fastlem-random-terrain = { path = "crates/fastlem-random-terrain", default-features = false }
 fastrand = { version = "2.1.1", default-features = false }
 fastrand-contrib = { version = "0.1.0", default-features = false }
+indexmap = { version = "2.5.0", default-features = false }
 itertools = { version = "0.13.0", default-features = false }
 leafwing-input-manager = { version = "0.15.0", default-features = false }
 log = { version = "0.4.22", default-features = false }

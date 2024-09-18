@@ -2877,6 +2877,7 @@ dependencies = [
  "fastlem-random-terrain",
  "fastrand",
  "fastrand-contrib",
+ "indexmap",
  "itertools",
  "leafwing-input-manager",
  "log",
