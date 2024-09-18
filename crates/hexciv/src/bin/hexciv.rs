@@ -152,6 +152,12 @@ enum TerrainFeatures {
 
 #[derive(Copy, Clone, Eq, PartialEq)]
 #[repr(u32)]
+enum UnitSelection {
+    Active = 0,
+}
+
+#[derive(Copy, Clone, Eq, PartialEq)]
+#[repr(u32)]
 enum UnitState {
     Ready = 0,
 }
@@ -190,23 +196,21 @@ enum DebugAction {
 #[derive(Resource)]
 struct CursorPos(Vec2);
 
-/// Marker for the base terrain layer tilemap.
 #[derive(Component)]
 struct BaseTerrainLayer;
 
-/// Marker for the river layer tilemap.
 #[derive(Component)]
 struct RiverLayer;
 
-/// Marker for the terrain features layer tilemap.
 #[derive(Component)]
 struct TerrainFeaturesLayer;
 
-/// Marker for the unit state layer tilemap.
+#[derive(Component)]
+struct UnitSelectionLayer;
+
 #[derive(Component)]
 struct UnitStateLayer;
 
-/// Marker for the land military unit layer tilemap.
 #[derive(Component)]
 struct LandMilitaryUnitLayer;
 
@@ -278,12 +282,16 @@ impl TerrainFeaturesLayer {
     const Z_INDEX: f32 = 2.0;
 }
 
-impl UnitStateLayer {
+impl UnitSelectionLayer {
     const Z_INDEX: f32 = 4.0;
 }
 
-impl LandMilitaryUnitLayer {
+impl UnitStateLayer {
     const Z_INDEX: f32 = 5.0;
+}
+
+impl LandMilitaryUnitLayer {
+    const Z_INDEX: f32 = 6.0;
 }
 
 fn main() {
@@ -816,6 +824,9 @@ fn spawn_starting_units(
         ),
     >,
 ) {
+    let image_handles = vec![asset_server.load("units/active.png")];
+    let unit_selection_texture_vec = TilemapTexture::Vector(image_handles);
+
     let image_handles = vec![asset_server.load("units/ready.png")];
     let unit_state_texture_vec = TilemapTexture::Vector(image_handles);
 
@@ -938,6 +949,26 @@ fn spawn_starting_units(
         land_military_unit_tile_storage.set(&settler_tile_pos, tile_entity);
     }
 
+    {
+        let tile_storage = TileStorage::empty(*map_size);
+        let tilemap_entity = commands.spawn_empty().id();
+
+        commands
+            .entity(tilemap_entity)
+            .insert(TilemapBundle {
+                grid_size: GRID_SIZE,
+                size: *map_size,
+                storage: tile_storage,
+                texture: unit_selection_texture_vec,
+                tile_size: TILE_SIZE,
+                map_type: MAP_TYPE,
+                transform: get_tilemap_center_transform(map_size, &GRID_SIZE, &MAP_TYPE, 0.0)
+                    * Transform::from_xyz(0.0, 0.0, UnitSelectionLayer::Z_INDEX),
+                ..Default::default()
+            })
+            .insert(UnitSelectionLayer);
+    }
+
     commands
         .entity(unit_state_tilemap_entity)
         .insert(TilemapBundle {
@@ -973,22 +1004,45 @@ fn spawn_starting_units(
 
 #[allow(clippy::type_complexity)]
 fn focus_camera_at_turn_start(
+    mut commands: Commands,
     mut camera_query: Query<&mut Transform, (With<Camera2d>, Without<UnitStateLayer>)>,
+    mut unit_selection_tilemap_query: Query<
+        (Entity, &mut TileStorage),
+        (With<UnitSelectionLayer>, Without<UnitStateLayer>),
+    >,
     unit_state_tilemap_query: Query<
         (&Transform, &TilemapType, &TilemapGridSize),
-        (With<UnitStateLayer>, Without<Camera2d>),
+        (
+            With<UnitStateLayer>,
+            Without<UnitSelectionLayer>,
+            Without<Camera2d>,
+        ),
     >,
-    unit_state_tile_query: Query<(&TilePos, &TileTextureIndex), With<UnitStateLayer>>,
+    unit_state_tile_query: Query<
+        (&TilePos, &TileTextureIndex),
+        (With<UnitStateLayer>, Without<UnitSelectionLayer>),
+    >,
 ) {
     let mut camera_transform = camera_query.get_single_mut().unwrap();
     let (map_transform, map_type, grid_size) = unit_state_tilemap_query.get_single().unwrap();
+    let (unit_selection_tilemap_entity, mut unit_selection_tile_storage) =
+        unit_selection_tilemap_query.get_single_mut().unwrap();
     for (tile_pos, tile_texture) in unit_state_tile_query.iter() {
         if tile_texture.0 == UnitState::Ready as u32 {
+            let unit_selection_tile_entity = commands
+                .spawn(TileBundle {
+                    position: *tile_pos,
+                    tilemap_id: TilemapId(unit_selection_tilemap_entity),
+                    texture_index: TileTextureIndex(UnitSelection::Active as u32),
+                    ..Default::default()
+                })
+                .insert(UnitSelectionLayer)
+                .id();
+            unit_selection_tile_storage.set(tile_pos, unit_selection_tile_entity);
             let tile_center = tile_pos
                 .center_in_world(grid_size, map_type)
                 .extend(UnitStateLayer::Z_INDEX);
             let tile_translation = map_transform.translation + tile_center;
-            info!(?tile_translation, "tile translation");
             camera_transform.translation = tile_translation.with_z(camera_transform.translation.z);
             break;
         }
