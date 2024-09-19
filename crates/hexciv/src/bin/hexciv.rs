@@ -11,7 +11,7 @@ use fastlem_random_terrain::{generate_terrain, Site2D, Terrain2D};
 use fastrand_contrib::RngExt as _;
 #[cfg(debug_assertions)]
 use hexciv::actions::DebugAction;
-use hexciv::actions::GlobalAction;
+use hexciv::actions::{GlobalAction, UnitAction};
 use hexciv::states::TurnState;
 use hexciv::types::Civilization;
 use indexmap::IndexSet;
@@ -165,6 +165,8 @@ enum UnitSelection {
 #[repr(u32)]
 enum UnitState {
     Ready = 0,
+    // OutOfMoves = 1,
+    OutOfOrders = 2,
 }
 
 #[derive(Copy, Clone, Eq, PartialEq)]
@@ -296,15 +298,20 @@ fn main() {
             })
             .set(ImagePlugin::default_nearest()),
     )
-    .add_plugins(InputManagerPlugin::<GlobalAction>::default())
+    .add_plugins((
+        InputManagerPlugin::<GlobalAction>::default(),
+        InputManagerPlugin::<UnitAction>::default(),
+    ))
     .add_plugins(PanCamPlugin)
     .add_plugins(TilemapPlugin)
     .init_resource::<FontHandle>()
     .init_resource::<MapRng>()
     .init_resource::<GameRng>()
     .init_resource::<ActionState<GlobalAction>>()
+    .init_resource::<ActionState<UnitAction>>()
     .init_resource::<CursorPos>()
     .insert_resource(GlobalAction::input_map())
+    .insert_resource(UnitAction::input_map())
     .init_state::<TurnState>()
     .add_systems(
         Startup,
@@ -328,6 +335,10 @@ fn main() {
         (cycle_ready_unit, focus_camera_on_active_unit)
             .chain()
             .run_if(action_just_pressed(GlobalAction::NextReadyUnit)),
+    )
+    .add_systems(
+        Update,
+        mark_active_unit_out_of_orders.run_if(action_just_pressed(UnitAction::SkipTurn)),
     )
     .add_systems(Update, update_cursor_pos);
 
@@ -840,7 +851,11 @@ fn spawn_starting_units(
     let image_handles = vec![asset_server.load("units/active.png")];
     let unit_selection_texture_vec = TilemapTexture::Vector(image_handles);
 
-    let image_handles = vec![asset_server.load("units/ready.png")];
+    let image_handles = vec![
+        asset_server.load("units/ready.png"),
+        asset_server.load("units/out.png"),
+        asset_server.load("units/out.png"),
+    ];
     let unit_state_texture_vec = TilemapTexture::Vector(image_handles);
 
     let image_handles = vec![
@@ -1110,6 +1125,39 @@ fn cycle_ready_unit(
             .insert(UnitSelectionLayer)
             .id();
         tile_storage.set(&tile_pos, tile_entity);
+    }
+}
+
+#[allow(clippy::type_complexity)]
+fn mark_active_unit_out_of_orders(
+    unit_selection_tile_query: Query<
+        (&TilePos, &TileTextureIndex),
+        (With<UnitSelectionLayer>, Without<UnitStateLayer>),
+    >,
+    mut unit_state_tile_query: Query<
+        (&TilePos, &mut TileTextureIndex),
+        (With<UnitStateLayer>, Without<UnitSelectionLayer>),
+    >,
+) {
+    let Some(active_unit_tile_pos) =
+        unit_selection_tile_query
+            .iter()
+            .find_map(|(tile_pos, tile_texture)| {
+                if tile_texture.0 == UnitSelection::Active as u32 {
+                    Some(*tile_pos)
+                } else {
+                    None
+                }
+            })
+    else {
+        // No active unit selection.
+        return;
+    };
+
+    for (tile_pos, mut tile_texture) in unit_state_tile_query.iter_mut() {
+        if *tile_pos == active_unit_tile_pos && tile_texture.0 == UnitState::Ready as u32 {
+            tile_texture.0 = UnitState::OutOfOrders as u32;
+        }
     }
 }
 
