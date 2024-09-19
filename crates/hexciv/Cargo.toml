@@ -21,6 +21,7 @@ indexmap = { workspace = true, features = ["std"] }
 itertools = { workspace = true, features = ["use_std"] }
 leafwing-input-manager = { workspace = true, features = ["asset", "keyboard", "mouse"] }
 log = { workspace = true, features = ["max_level_debug", "release_max_level_warn"] }
+num_enum = { workspace = true, features = ["std"] }
 ordered-float = { workspace = true, features = ["std"] }
 strum = { workspace = true, features = ["derive", "std"] }
 tracing = { workspace = true, features = ["max_level_debug", "release_max_level_warn"] }

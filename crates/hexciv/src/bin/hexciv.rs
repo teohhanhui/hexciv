@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::ops::Add;
 
 use bevy::color::palettes;
 use bevy::ecs::system::{RunSystemOnce as _, SystemState};
@@ -18,6 +19,7 @@ use indexmap::IndexSet;
 use itertools::{chain, repeat_n, Itertools as _};
 use leafwing_input_manager::common_conditions::{action_just_pressed, action_toggle_active};
 use leafwing_input_manager::prelude::*;
+use num_enum::{IntoPrimitive, TryFromPrimitive};
 use ordered_float::NotNan;
 use strum::VariantArray as _;
 
@@ -112,7 +114,7 @@ const TROPICS_TILE_CHOICES: [BaseTerrain; 7] = [
 const OASIS_CHOICES: [bool; 5] = [true, false, false, false, false];
 const ICE_CHOICES: [bool; 4] = [true, true, true, false];
 
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone, Eq, PartialEq, IntoPrimitive, TryFromPrimitive)]
 #[repr(u32)]
 enum BaseTerrain {
     Plains = 0,
@@ -120,73 +122,73 @@ enum BaseTerrain {
     Desert = 2,
     Tundra = 3,
     Snow = 4,
-    // PlainsHills = 5,
-    // GrasslandHills = 6,
-    // DesertHills = 7,
-    // TundraHills = 8,
-    // SnowHills = 9,
-    // PlainsMountains = 10,
-    // GrasslandMountains = 11,
-    // DesertMountains = 12,
-    // TundraMountains = 13,
-    // SnowMountains = 14,
+    PlainsHills = 5,
+    GrasslandHills = 6,
+    DesertHills = 7,
+    TundraHills = 8,
+    SnowHills = 9,
+    PlainsMountains = 10,
+    GrasslandMountains = 11,
+    DesertMountains = 12,
+    TundraMountains = 13,
+    SnowMountains = 14,
     Coast = 15,
     Ocean = 16,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, IntoPrimitive)]
 #[repr(u32)]
 enum BaseTerrainVariant {
     Hills = 5,
     Mountains = 10,
 }
 
-type RiverEdges = BitArr!(for 6, in u16);
+type RiverEdges = BitArr!(for 6, in u32, Lsb0);
 
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone, Eq, PartialEq, IntoPrimitive, TryFromPrimitive)]
 #[repr(u32)]
 enum TerrainFeatures {
-    // Woods = 0,
-    // Rainforest = 1,
-    // Marsh = 2,
-    // Floodplains = 3,
+    Woods = 0,
+    Rainforest = 1,
+    Marsh = 2,
+    Floodplains = 3,
     Oasis = 4,
-    // Cliffs = 5,
+    Cliffs = 5,
     Ice = 6,
 }
 
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone, Eq, PartialEq, IntoPrimitive, TryFromPrimitive)]
 #[repr(u32)]
 enum UnitSelection {
     Active = 0,
 }
 
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone, Eq, PartialEq, IntoPrimitive, TryFromPrimitive)]
 #[repr(u32)]
 enum UnitState {
-    // CivilianOutOfMoves = 0,
-    CivilianReady = 1,
-    // CivilianReadyOutOfOrders = 2,
-    // LandMilitaryOutOfMoves = 3,
-    LandMilitaryReady = 4,
-    // LandMilitaryReadyOutOfOrders = 5,
-    LandMilitaryFortified = 6,
-    // LandMilitaryFortifiedOutOfOrders = 7,
+    CivilianReady = 0,
+    LandMilitaryReady = 1,
+    LandMilitaryFortified = 2,
+    CivilianReadyOutOfOrders = 3,
+    LandMilitaryReadyOutOfOrders = 4,
+    LandMilitaryFortifiedOutOfOrders = 5,
+    CivilianOutOfMoves = 6,
+    LandMilitaryOutOfMoves = 7,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, IntoPrimitive)]
 #[repr(u32)]
 enum UnitStateModifier {
-    OutOfOrders = 1,
+    OutOfOrders = 3,
 }
 
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone, Eq, PartialEq, IntoPrimitive, TryFromPrimitive)]
 #[repr(u32)]
 enum CivilianUnit {
     Settler = 0,
 }
 
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone, Eq, PartialEq, IntoPrimitive, TryFromPrimitive)]
 #[repr(u32)]
 enum LandMilitaryUnit {
     Warrior = 0,
@@ -243,6 +245,63 @@ struct HighlightedLabel;
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, SystemSet)]
 struct SpawnTilemapSet;
+
+impl Add<BaseTerrainVariant> for BaseTerrain {
+    type Output = Self;
+
+    fn add(self, rhs: BaseTerrainVariant) -> Self::Output {
+        match self {
+            BaseTerrain::Plains
+            | BaseTerrain::Grassland
+            | BaseTerrain::Desert
+            | BaseTerrain::Tundra
+            | BaseTerrain::Snow => {
+                let base: u32 = self.into();
+                let variant: u32 = rhs.into();
+                Self::try_from(base + variant).unwrap()
+            },
+            BaseTerrain::PlainsHills
+            | BaseTerrain::GrasslandHills
+            | BaseTerrain::DesertHills
+            | BaseTerrain::TundraHills
+            | BaseTerrain::SnowHills
+            | BaseTerrain::PlainsMountains
+            | BaseTerrain::GrasslandMountains
+            | BaseTerrain::DesertMountains
+            | BaseTerrain::TundraMountains
+            | BaseTerrain::SnowMountains => {
+                unimplemented!("base terrain variants are not stackable");
+            },
+            BaseTerrain::Coast | BaseTerrain::Ocean => {
+                unimplemented!("coast and ocean base terrain do not have variants");
+            },
+        }
+    }
+}
+
+impl Add<UnitStateModifier> for UnitState {
+    type Output = Self;
+
+    fn add(self, rhs: UnitStateModifier) -> Self::Output {
+        match self {
+            UnitState::CivilianReady
+            | UnitState::LandMilitaryReady
+            | UnitState::LandMilitaryFortified => {
+                let state: u32 = self.into();
+                let modifier: u32 = rhs.into();
+                Self::try_from(state + modifier).unwrap()
+            },
+            UnitState::CivilianReadyOutOfOrders
+            | UnitState::LandMilitaryReadyOutOfOrders
+            | UnitState::LandMilitaryFortifiedOutOfOrders => {
+                unimplemented!("unit state modifiers are not stackable");
+            },
+            UnitState::CivilianOutOfMoves | UnitState::LandMilitaryOutOfMoves => {
+                unimplemented!("out-of-moves unit states do not have modifiers");
+            },
+        }
+    }
+}
 
 impl EarthLatitude {
     pub const fn latitude(&self) -> f64 {
@@ -488,7 +547,7 @@ fn spawn_tilemap(
                 .collect();
             let elevation = elevations.iter().sum::<NotNan<_>>() / elevations.len() as f64;
             let texture_index = if elevation < NotNan::new(0.05).unwrap() {
-                TileTextureIndex(BaseTerrain::Ocean as u32)
+                TileTextureIndex(BaseTerrain::Ocean.into())
             } else {
                 let latitude = NotNan::new(-90.0).unwrap()
                     + NotNan::new(180.0).unwrap()
@@ -497,11 +556,11 @@ fn spawn_tilemap(
                 let base_terrain = choose_base_terrain_by_latitude(rng, latitude);
 
                 TileTextureIndex(if elevation >= NotNan::new(25.0).unwrap() {
-                    base_terrain as u32 + BaseTerrainVariant::Mountains as u32
+                    (base_terrain + BaseTerrainVariant::Mountains).into()
                 } else if elevation >= NotNan::new(5.0).unwrap() {
-                    base_terrain as u32 + BaseTerrainVariant::Hills as u32
+                    (base_terrain + BaseTerrainVariant::Hills).into()
                 } else {
-                    base_terrain as u32
+                    base_terrain.into()
                 })
             };
             let tile_entity = commands
@@ -532,12 +591,12 @@ fn spawn_tilemap(
         .insert(BaseTerrainLayer);
 
     let image_handles = {
-        let image_map: BTreeMap<u16, Handle<Image>> = repeat_n([true, false].into_iter(), 6)
+        let image_map: BTreeMap<u32, Handle<Image>> = repeat_n([true, false].into_iter(), 6)
             .multi_cartesian_product()
             .map(|data| {
                 let mut bits: RiverEdges = BitArray::<_>::ZERO;
-                for (i, v) in data.iter().enumerate() {
-                    bits.set(i, *v);
+                for (i, &v) in data.iter().enumerate() {
+                    bits.set(i, v);
                 }
                 (
                     bits.load(),
@@ -546,16 +605,16 @@ fn spawn_tilemap(
                         edges = data
                             .iter()
                             .enumerate()
-                            .map(|(i, v)| if *v { i.to_string() } else { "x".to_owned() })
+                            .map(|(i, &v)| if v { i.to_string() } else { "x".to_owned() })
                             .join("")
                     )),
                 )
             })
             .collect();
-        let size = usize::from(*image_map.last_key_value().unwrap().0) + 1;
+        let size = usize::try_from(*image_map.last_key_value().unwrap().0).unwrap() + 1;
         let mut image_vec = vec![asset_server.load("tiles/transparent.png"); size];
         for (key, image) in image_map {
-            image_vec[usize::from(key)] = image;
+            image_vec[usize::try_from(key).unwrap()] = image;
         }
         image_vec
     };
@@ -671,23 +730,23 @@ fn post_spawn_tilemap(
                 HexNeighbors::get_neighboring_positions_row_odd(&tile_pos, map_size);
             let neighbor_entities = neighbor_positions.entities(base_terrain_tile_storage);
 
-            if tile_texture.0 == BaseTerrain::Ocean as u32
+            if tile_texture.0 == BaseTerrain::Ocean.into()
                 && neighbor_entities.iter().any(|neighbor_entity| {
                     let tile_texture = base_terrain_tile_query.get(*neighbor_entity).unwrap();
-                    ![BaseTerrain::Ocean as u32, BaseTerrain::Coast as u32]
+                    ![BaseTerrain::Ocean.into(), BaseTerrain::Coast.into()]
                         .contains(&tile_texture.0)
                 })
             {
                 let mut tile_texture = base_terrain_tile_query.get_mut(tile_entity).unwrap();
-                tile_texture.0 = BaseTerrain::Coast as u32;
+                tile_texture.0 = BaseTerrain::Coast.into();
             }
 
-            if tile_texture.0 == BaseTerrain::Desert as u32 && rng.choice(OASIS_CHOICES).unwrap() {
+            if tile_texture.0 == BaseTerrain::Desert.into() && rng.choice(OASIS_CHOICES).unwrap() {
                 let tile_entity = commands
                     .spawn(TileBundle {
                         position: tile_pos,
                         tilemap_id: TilemapId(terrain_features_tilemap_entity),
-                        texture_index: TileTextureIndex(TerrainFeatures::Oasis as u32),
+                        texture_index: TileTextureIndex(TerrainFeatures::Oasis.into()),
                         ..Default::default()
                     })
                     .insert(TerrainFeaturesLayer)
@@ -695,7 +754,7 @@ fn post_spawn_tilemap(
                 terrain_features_tile_storage.set(&tile_pos, tile_entity);
             }
 
-            if [BaseTerrain::Ocean as u32, BaseTerrain::Coast as u32].contains(&tile_texture.0) {
+            if [BaseTerrain::Ocean.into(), BaseTerrain::Coast.into()].contains(&tile_texture.0) {
                 let latitude = NotNan::new(-90.0).unwrap()
                     + NotNan::new(180.0).unwrap()
                         * ((NotNan::from(tile_pos.y) + 0.5) / NotNan::from(map_size.y));
@@ -708,7 +767,7 @@ fn post_spawn_tilemap(
                         .spawn(TileBundle {
                             position: tile_pos,
                             tilemap_id: TilemapId(terrain_features_tilemap_entity),
-                            texture_index: TileTextureIndex(TerrainFeatures::Ice as u32),
+                            texture_index: TileTextureIndex(TerrainFeatures::Ice.into()),
                             ..Default::default()
                         })
                         .insert(TerrainFeaturesLayer)
@@ -718,16 +777,16 @@ fn post_spawn_tilemap(
             }
 
             if ![
-                BaseTerrain::Ocean as u32,
-                BaseTerrain::Coast as u32,
+                BaseTerrain::Ocean.into(),
+                BaseTerrain::Coast.into(),
                 // Exclude lowlands and deserts as river source.
-                BaseTerrain::Plains as u32,
-                BaseTerrain::Grassland as u32,
-                BaseTerrain::Desert as u32,
-                BaseTerrain::Desert as u32 + BaseTerrainVariant::Hills as u32,
-                BaseTerrain::Desert as u32 + BaseTerrainVariant::Mountains as u32,
-                BaseTerrain::Tundra as u32,
-                BaseTerrain::Snow as u32,
+                BaseTerrain::Plains.into(),
+                BaseTerrain::Grassland.into(),
+                BaseTerrain::Desert.into(),
+                (BaseTerrain::Desert + BaseTerrainVariant::Hills).into(),
+                (BaseTerrain::Desert + BaseTerrainVariant::Mountains).into(),
+                BaseTerrain::Tundra.into(),
+                BaseTerrain::Snow.into(),
             ]
             .contains(&tile_texture.0)
             {
@@ -799,7 +858,7 @@ fn post_spawn_tilemap(
                     let tile_texture = *base_terrain_tile_query
                         .get(*edge_adjacent_tile_entity)
                         .unwrap();
-                    if [BaseTerrain::Ocean as u32, BaseTerrain::Coast as u32]
+                    if [BaseTerrain::Ocean.into(), BaseTerrain::Coast.into()]
                         .contains(&tile_texture.0)
                     {
                         // Avoid creating river edges parallel to the sea shore / lake shore.
@@ -812,7 +871,7 @@ fn post_spawn_tilemap(
                     let tile_texture = *base_terrain_tile_query
                         .get(*edge_adjacent_tile_entity)
                         .unwrap();
-                    if [BaseTerrain::Ocean as u32, BaseTerrain::Coast as u32]
+                    if [BaseTerrain::Ocean.into(), BaseTerrain::Coast.into()]
                         .contains(&tile_texture.0)
                     {
                         // Avoid creating river edges parallel to the sea shore / lake shore.
@@ -843,7 +902,7 @@ fn post_spawn_tilemap(
             .spawn(TileBundle {
                 position: tile_pos,
                 tilemap_id: TilemapId(river_tilemap_entity),
-                texture_index: TileTextureIndex(u32::from(river_edges.load::<u16>())),
+                texture_index: TileTextureIndex(river_edges.load()),
                 ..Default::default()
             })
             .insert(RiverLayer)
@@ -879,14 +938,14 @@ fn spawn_starting_units(
     let unit_selection_texture_vec = TilemapTexture::Vector(image_handles);
 
     let image_handles = vec![
-        asset_server.load("units/civilian-out-of-moves.png"),
         asset_server.load("units/civilian-ready.png"),
-        asset_server.load("units/civilian-ready-out-of-orders.png"),
-        asset_server.load("units/land-military-out-of-moves.png"),
         asset_server.load("units/land-military-ready.png"),
-        asset_server.load("units/land-military-ready-out-of-orders.png"),
         asset_server.load("units/land-military-fortified.png"),
+        asset_server.load("units/civilian-ready-out-of-orders.png"),
+        asset_server.load("units/land-military-ready-out-of-orders.png"),
         asset_server.load("units/land-military-fortified-out-of-orders.png"),
+        asset_server.load("units/civilian-out-of-moves.png"),
+        asset_server.load("units/land-military-out-of-moves.png"),
     ];
     let unit_state_texture_vec = TilemapTexture::Vector(image_handles);
 
@@ -912,14 +971,14 @@ fn spawn_starting_units(
             let tile_texture = *base_terrain_tile_query.get(tile_entity).unwrap();
 
             if [
-                BaseTerrain::Ocean as u32,
-                BaseTerrain::Coast as u32,
+                BaseTerrain::Ocean.into(),
+                BaseTerrain::Coast.into(),
                 // Exclude mountains.
-                BaseTerrain::Plains as u32 + BaseTerrainVariant::Mountains as u32,
-                BaseTerrain::Grassland as u32 + BaseTerrainVariant::Mountains as u32,
-                BaseTerrain::Desert as u32 + BaseTerrainVariant::Mountains as u32,
-                BaseTerrain::Tundra as u32 + BaseTerrainVariant::Mountains as u32,
-                BaseTerrain::Snow as u32 + BaseTerrainVariant::Mountains as u32,
+                (BaseTerrain::Plains + BaseTerrainVariant::Mountains).into(),
+                (BaseTerrain::Grassland + BaseTerrainVariant::Mountains).into(),
+                (BaseTerrain::Desert + BaseTerrainVariant::Mountains).into(),
+                (BaseTerrain::Tundra + BaseTerrainVariant::Mountains).into(),
+                (BaseTerrain::Snow + BaseTerrainVariant::Mountains).into(),
             ]
             .contains(&tile_texture.0)
             {
@@ -965,7 +1024,7 @@ fn spawn_starting_units(
             .spawn(TileBundle {
                 position: settler_tile_pos,
                 tilemap_id: TilemapId(unit_state_tilemap_entity),
-                texture_index: TileTextureIndex(UnitState::CivilianReady as u32),
+                texture_index: TileTextureIndex(UnitState::CivilianReady.into()),
                 color: TileColor(civ.colors()[0].into()),
                 ..Default::default()
             })
@@ -976,7 +1035,7 @@ fn spawn_starting_units(
             .spawn(TileBundle {
                 position: settler_tile_pos,
                 tilemap_id: TilemapId(civilian_unit_tilemap_entity),
-                texture_index: TileTextureIndex(CivilianUnit::Settler as u32),
+                texture_index: TileTextureIndex(CivilianUnit::Settler.into()),
                 color: TileColor(civ.colors()[1].into()),
                 ..Default::default()
             })
@@ -991,7 +1050,7 @@ fn spawn_starting_units(
             .spawn(TileBundle {
                 position: warrior_tile_pos,
                 tilemap_id: TilemapId(unit_state_tilemap_entity),
-                texture_index: TileTextureIndex(UnitState::LandMilitaryReady as u32),
+                texture_index: TileTextureIndex(UnitState::LandMilitaryReady.into()),
                 color: TileColor(civ.colors()[0].into()),
                 ..Default::default()
             })
@@ -1002,7 +1061,7 @@ fn spawn_starting_units(
             .spawn(TileBundle {
                 position: warrior_tile_pos,
                 tilemap_id: TilemapId(land_military_unit_tilemap_entity),
-                texture_index: TileTextureIndex(LandMilitaryUnit::Warrior as u32),
+                texture_index: TileTextureIndex(LandMilitaryUnit::Warrior.into()),
                 color: TileColor(civ.colors()[1].into()),
                 ..Default::default()
             })
@@ -1097,8 +1156,8 @@ fn cycle_ready_unit(
     let ready_unit_tile_positions: IndexSet<_> = unit_state_tile_query
         .iter()
         .filter_map(|(&tile_pos, &tile_texture)| match tile_texture {
-            TileTextureIndex(t) if t == UnitState::CivilianReady as u32 => Some(tile_pos),
-            TileTextureIndex(t) if t == UnitState::LandMilitaryReady as u32 => Some(tile_pos),
+            TileTextureIndex(t) if t == UnitState::CivilianReady.into() => Some(tile_pos),
+            TileTextureIndex(t) if t == UnitState::LandMilitaryReady.into() => Some(tile_pos),
             _ => None,
         })
         .collect();
@@ -1110,7 +1169,7 @@ fn cycle_ready_unit(
         unit_selection_tile_query
             .iter_mut()
             .find_map(|(tile_pos, &tile_texture)| {
-                if tile_texture.0 == UnitSelection::Active as u32 {
+                if tile_texture.0 == UnitSelection::Active.into() {
                     Some(tile_pos)
                 } else {
                     None
@@ -1166,7 +1225,7 @@ fn cycle_ready_unit(
             .spawn(TileBundle {
                 position: tile_pos,
                 tilemap_id: TilemapId(tilemap_entity),
-                texture_index: TileTextureIndex(UnitSelection::Active as u32),
+                texture_index: TileTextureIndex(UnitSelection::Active.into()),
                 ..Default::default()
             })
             .insert(UnitSelectionLayer)
@@ -1187,7 +1246,7 @@ fn focus_camera_on_active_unit(
     let mut camera_transform = camera_query.get_single_mut().unwrap();
     let (map_transform, map_type, grid_size) = unit_selection_tilemap_query.get_single().unwrap();
     for (tile_pos, tile_texture) in unit_selection_tile_query.iter() {
-        if tile_texture.0 == UnitSelection::Active as u32 {
+        if tile_texture.0 == UnitSelection::Active.into() {
             let tile_center = tile_pos
                 .center_in_world(grid_size, map_type)
                 .extend(UnitSelectionLayer::Z_INDEX);
@@ -1213,7 +1272,7 @@ fn mark_active_unit_out_of_orders(
         unit_selection_tile_query
             .iter()
             .find_map(|(tile_pos, tile_texture)| {
-                if tile_texture.0 == UnitSelection::Active as u32 {
+                if tile_texture.0 == UnitSelection::Active.into() {
                     Some(*tile_pos)
                 } else {
                     None
@@ -1227,17 +1286,24 @@ fn mark_active_unit_out_of_orders(
     for (tile_pos, mut tile_texture) in unit_state_tile_query.iter_mut() {
         if *tile_pos == active_unit_tile_pos {
             match *tile_texture {
-                TileTextureIndex(t) if t == UnitState::CivilianReady as u32 => {
+                TileTextureIndex(t) if t == UnitState::CivilianReady.into() => {
                     tile_texture.0 =
-                        UnitState::CivilianReady as u32 + UnitStateModifier::OutOfOrders as u32;
+                        (UnitState::CivilianReady + UnitStateModifier::OutOfOrders).into();
                 },
-                TileTextureIndex(t) if t == UnitState::LandMilitaryReady as u32 => {
+                TileTextureIndex(t) if t == UnitState::LandMilitaryReady.into() => {
                     tile_texture.0 =
-                        UnitState::LandMilitaryReady as u32 + UnitStateModifier::OutOfOrders as u32;
+                        (UnitState::LandMilitaryReady + UnitStateModifier::OutOfOrders).into();
                 },
-                TileTextureIndex(t) if t == UnitState::LandMilitaryFortified as u32 => {
-                    tile_texture.0 = UnitState::LandMilitaryFortified as u32
-                        + UnitStateModifier::OutOfOrders as u32;
+                TileTextureIndex(t) if t == UnitState::LandMilitaryFortified.into() => {
+                    tile_texture.0 =
+                        (UnitState::LandMilitaryReady + UnitStateModifier::OutOfOrders).into();
+                },
+                TileTextureIndex(t)
+                    if t == (UnitState::LandMilitaryFortified + UnitStateModifier::OutOfOrders)
+                        .into() =>
+                {
+                    tile_texture.0 =
+                        (UnitState::LandMilitaryReady + UnitStateModifier::OutOfOrders).into();
                 },
                 _ => {},
             }
@@ -1276,7 +1342,7 @@ fn mark_active_unit_fortified(
         unit_selection_tile_query
             .iter()
             .find_map(|(tile_pos, tile_texture)| {
-                if tile_texture.0 == UnitSelection::Active as u32 {
+                if tile_texture.0 == UnitSelection::Active.into() {
                     Some(*tile_pos)
                 } else {
                     None
@@ -1298,7 +1364,7 @@ fn mark_active_unit_fortified(
     for (tile_pos, mut tile_texture) in unit_state_tile_query.iter_mut() {
         if *tile_pos == active_unit_tile_pos {
             tile_texture.0 =
-                UnitState::LandMilitaryFortified as u32 + UnitStateModifier::OutOfOrders as u32;
+                (UnitState::LandMilitaryFortified + UnitStateModifier::OutOfOrders).into();
         }
     }
 }

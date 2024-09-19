@@ -25,6 +25,7 @@ itertools = { version = "0.13.0", default-features = false }
 leafwing-input-manager = { version = "0.15.0", default-features = false }
 log = { version = "0.4.22", default-features = false }
 noise = { version = "0.9.0", default-features = false }
+num_enum = { version = "0.7.3", default-features = false }
 ordered-float = { version = "4.2.2", default-features = false }
 strum = { version = "0.26.3", default-features = false }
 terrain-graph = { version = "1.0.1", default-features = false }

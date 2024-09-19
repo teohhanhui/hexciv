@@ -2881,6 +2881,7 @@ dependencies = [
  "itertools",
  "leafwing-input-manager",
  "log",
+ "num_enum",
  "ordered-float",
  "strum",
  "tracing",
