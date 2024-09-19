@@ -164,9 +164,17 @@ enum UnitSelection {
 #[derive(Copy, Clone, Eq, PartialEq)]
 #[repr(u32)]
 enum UnitState {
-    Ready = 0,
-    // OutOfMoves = 1,
-    OutOfOrders = 2,
+    // LandMilitaryOutOfMoves = 0,
+    LandMilitaryReady = 1,
+    // LandMilitaryReadyOutOfOrders = 2,
+    LandMilitaryFortified = 3,
+    // LandMilitaryFortifiedOutOfOrders = 4,
+}
+
+#[derive(Copy, Clone)]
+#[repr(u32)]
+enum UnitStateModifier {
+    OutOfOrders = 1,
 }
 
 #[derive(Copy, Clone, Eq, PartialEq)]
@@ -339,6 +347,10 @@ fn main() {
     .add_systems(
         Update,
         mark_active_unit_out_of_orders.run_if(action_just_pressed(UnitAction::SkipTurn)),
+    )
+    .add_systems(
+        Update,
+        mark_active_unit_fortified.run_if(action_just_pressed(UnitAction::Fortify)),
     )
     .add_systems(Update, update_cursor_pos);
 
@@ -852,9 +864,11 @@ fn spawn_starting_units(
     let unit_selection_texture_vec = TilemapTexture::Vector(image_handles);
 
     let image_handles = vec![
-        asset_server.load("units/ready.png"),
-        asset_server.load("units/out.png"),
-        asset_server.load("units/out.png"),
+        asset_server.load("units/land-military-out-of-moves.png"),
+        asset_server.load("units/land-military-ready.png"),
+        asset_server.load("units/land-military-ready-out-of-orders.png"),
+        asset_server.load("units/land-military-fortified.png"),
+        asset_server.load("units/land-military-fortified-out-of-orders.png"),
     ];
     let unit_state_texture_vec = TilemapTexture::Vector(image_handles);
 
@@ -931,7 +945,7 @@ fn spawn_starting_units(
             .spawn(TileBundle {
                 position: settler_tile_pos,
                 tilemap_id: TilemapId(unit_state_tilemap_entity),
-                texture_index: TileTextureIndex(UnitState::Ready as u32),
+                texture_index: TileTextureIndex(UnitState::LandMilitaryReady as u32),
                 color: TileColor(civ.colors()[0].into()),
                 ..Default::default()
             })
@@ -957,7 +971,7 @@ fn spawn_starting_units(
             .spawn(TileBundle {
                 position: warrior_tile_pos,
                 tilemap_id: TilemapId(unit_state_tilemap_entity),
-                texture_index: TileTextureIndex(UnitState::Ready as u32),
+                texture_index: TileTextureIndex(UnitState::LandMilitaryReady as u32),
                 color: TileColor(civ.colors()[0].into()),
                 ..Default::default()
             })
@@ -1048,7 +1062,7 @@ fn cycle_ready_unit(
     let ready_unit_tile_positions: IndexSet<_> = unit_state_tile_query
         .iter()
         .filter_map(|(&tile_pos, &tile_texture)| {
-            if tile_texture.0 == UnitState::Ready as u32 {
+            if tile_texture.0 == UnitState::LandMilitaryReady as u32 {
                 Some(tile_pos)
             } else {
                 None
@@ -1129,6 +1143,29 @@ fn cycle_ready_unit(
 }
 
 #[allow(clippy::type_complexity)]
+fn focus_camera_on_active_unit(
+    mut camera_query: Query<&mut Transform, (With<Camera2d>, Without<UnitSelectionLayer>)>,
+    unit_selection_tilemap_query: Query<
+        (&Transform, &TilemapType, &TilemapGridSize),
+        (With<UnitSelectionLayer>, Without<Camera2d>),
+    >,
+    unit_selection_tile_query: Query<(&TilePos, &TileTextureIndex), With<UnitSelectionLayer>>,
+) {
+    let mut camera_transform = camera_query.get_single_mut().unwrap();
+    let (map_transform, map_type, grid_size) = unit_selection_tilemap_query.get_single().unwrap();
+    for (tile_pos, tile_texture) in unit_selection_tile_query.iter() {
+        if tile_texture.0 == UnitSelection::Active as u32 {
+            let tile_center = tile_pos
+                .center_in_world(grid_size, map_type)
+                .extend(UnitSelectionLayer::Z_INDEX);
+            let tile_translation = map_transform.translation + tile_center;
+            camera_transform.translation = tile_translation.with_z(camera_transform.translation.z);
+            break;
+        }
+    }
+}
+
+#[allow(clippy::type_complexity)]
 fn mark_active_unit_out_of_orders(
     unit_selection_tile_query: Query<
         (&TilePos, &TileTextureIndex),
@@ -1155,31 +1192,76 @@ fn mark_active_unit_out_of_orders(
     };
 
     for (tile_pos, mut tile_texture) in unit_state_tile_query.iter_mut() {
-        if *tile_pos == active_unit_tile_pos && tile_texture.0 == UnitState::Ready as u32 {
-            tile_texture.0 = UnitState::OutOfOrders as u32;
+        if *tile_pos == active_unit_tile_pos {
+            match *tile_texture {
+                TileTextureIndex(t) if t == UnitState::LandMilitaryReady as u32 => {
+                    tile_texture.0 =
+                        UnitState::LandMilitaryReady as u32 + UnitStateModifier::OutOfOrders as u32;
+                },
+                TileTextureIndex(t) if t == UnitState::LandMilitaryFortified as u32 => {
+                    tile_texture.0 = UnitState::LandMilitaryFortified as u32
+                        + UnitStateModifier::OutOfOrders as u32;
+                },
+                _ => {},
+            }
         }
     }
 }
 
 #[allow(clippy::type_complexity)]
-fn focus_camera_on_active_unit(
-    mut camera_query: Query<&mut Transform, (With<Camera2d>, Without<UnitSelectionLayer>)>,
-    unit_selection_tilemap_query: Query<
-        (&Transform, &TilemapType, &TilemapGridSize),
-        (With<UnitSelectionLayer>, Without<Camera2d>),
+fn mark_active_unit_fortified(
+    unit_selection_tile_query: Query<
+        (&TilePos, &TileTextureIndex),
+        (
+            With<UnitSelectionLayer>,
+            Without<UnitStateLayer>,
+            Without<LandMilitaryUnitLayer>,
+        ),
     >,
-    unit_selection_tile_query: Query<(&TilePos, &TileTextureIndex), With<UnitSelectionLayer>>,
+    mut unit_state_tile_query: Query<
+        (&TilePos, &mut TileTextureIndex),
+        (
+            With<UnitStateLayer>,
+            Without<UnitSelectionLayer>,
+            Without<LandMilitaryUnitLayer>,
+        ),
+    >,
+    land_military_unit_tile_query: Query<
+        &TilePos,
+        (
+            With<LandMilitaryUnitLayer>,
+            Without<UnitSelectionLayer>,
+            Without<UnitStateLayer>,
+        ),
+    >,
 ) {
-    let mut camera_transform = camera_query.get_single_mut().unwrap();
-    let (map_transform, map_type, grid_size) = unit_selection_tilemap_query.get_single().unwrap();
-    for (tile_pos, tile_texture) in unit_selection_tile_query.iter() {
-        if tile_texture.0 == UnitSelection::Active as u32 {
-            let tile_center = tile_pos
-                .center_in_world(grid_size, map_type)
-                .extend(UnitSelectionLayer::Z_INDEX);
-            let tile_translation = map_transform.translation + tile_center;
-            camera_transform.translation = tile_translation.with_z(camera_transform.translation.z);
-            break;
+    let Some(active_unit_tile_pos) =
+        unit_selection_tile_query
+            .iter()
+            .find_map(|(tile_pos, tile_texture)| {
+                if tile_texture.0 == UnitSelection::Active as u32 {
+                    Some(*tile_pos)
+                } else {
+                    None
+                }
+            })
+    else {
+        // No active unit selection.
+        return;
+    };
+
+    if !land_military_unit_tile_query
+        .iter()
+        .any(|&tile_pos| tile_pos == active_unit_tile_pos)
+    {
+        // Active unit is not a land military unit.
+        return;
+    }
+
+    for (tile_pos, mut tile_texture) in unit_state_tile_query.iter_mut() {
+        if *tile_pos == active_unit_tile_pos {
+            tile_texture.0 =
+                UnitState::LandMilitaryFortified as u32 + UnitStateModifier::OutOfOrders as u32;
         }
     }
 }
