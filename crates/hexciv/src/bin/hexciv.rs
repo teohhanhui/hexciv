@@ -6,13 +6,13 @@ use bevy::ecs::system::{RunSystemOnce as _, SystemState};
 use bevy::prelude::*;
 use bevy_ecs_tilemap::helpers::hex_grid::neighbors::{HexNeighbors, HEX_DIRECTIONS};
 use bevy_ecs_tilemap::prelude::*;
-use bevy_pancam::{PanCam, PanCamPlugin};
+use bevy_pancam::{DirectionKeys, PanCam, PanCamPlugin};
 use bitvec::prelude::*;
 use fastlem_random_terrain::{generate_terrain, Site2D, Terrain2D};
 use fastrand_contrib::RngExt as _;
 #[cfg(debug_assertions)]
 use hexciv::actions::DebugAction;
-use hexciv::actions::{GlobalAction, UnitAction};
+use hexciv::actions::{CursorAction, GlobalAction, UnitAction};
 use hexciv::states::TurnState;
 use hexciv::types::Civilization;
 use indexmap::IndexSet;
@@ -216,6 +216,9 @@ struct MapTerrain(Terrain2D);
 #[derive(Resource)]
 struct CursorPos(Vec2);
 
+#[derive(Resource)]
+struct CursorTilePos(TilePos);
+
 #[derive(Component)]
 struct BaseTerrainLayer;
 
@@ -383,6 +386,7 @@ fn main() {
     .add_plugins((
         InputManagerPlugin::<GlobalAction>::default(),
         InputManagerPlugin::<UnitAction>::default(),
+        InputManagerPlugin::<CursorAction>::default(),
     ))
     .add_plugins(PanCamPlugin)
     .add_plugins(TilemapPlugin)
@@ -391,15 +395,23 @@ fn main() {
     .init_resource::<GameRng>()
     .init_resource::<ActionState<GlobalAction>>()
     .init_resource::<ActionState<UnitAction>>()
+    .init_resource::<ActionState<CursorAction>>()
     .init_resource::<CursorPos>()
     .insert_resource(GlobalAction::input_map())
     .insert_resource(UnitAction::input_map())
+    .insert_resource(CursorAction::input_map())
     .init_state::<TurnState>()
     .add_systems(
         Startup,
         (spawn_tilemap, post_spawn_tilemap)
             .chain()
             .in_set(SpawnTilemapSet),
+    )
+    .add_systems(
+        Startup,
+        spawn_camera
+            .after(SpawnTilemapSet)
+            .before(spawn_starting_units),
     )
     .add_systems(Startup, spawn_starting_units.after(SpawnTilemapSet))
     .add_systems(
@@ -426,7 +438,13 @@ fn main() {
         Update,
         mark_active_unit_fortified.run_if(action_just_pressed(UnitAction::Fortify)),
     )
-    .add_systems(Update, update_cursor_pos);
+    .add_systems(Update, (update_cursor_pos, update_cursor_tile_pos).chain())
+    .add_systems(
+        Update,
+        update_unit_selection
+            .run_if(action_just_pressed(CursorAction::Click))
+            .after(update_cursor_tile_pos),
+    );
 
     #[cfg(debug_assertions)]
     {
@@ -442,7 +460,7 @@ fn main() {
                         hide_tile_labels
                             .run_if(action_toggle_active(true, DebugAction::ShowTileLabels)),
                     ),
-                    highlight_tile_labels.after(update_cursor_pos),
+                    highlight_tile_labels.after(update_cursor_tile_pos),
                 )
                     .chain(),
             );
@@ -457,21 +475,6 @@ fn spawn_tilemap(
     asset_server: Res<AssetServer>,
     mut map_rng: ResMut<MapRng>,
 ) {
-    commands.spawn(Camera2dBundle::default()).insert(PanCam {
-        grab_buttons: vec![MouseButton::Left],
-        min_scale: 1.0,
-        max_scale: 10.0,
-        min_x: -((MAP_SIDE_LENGTH_X - 1) as f64 * CENTER_TO_CENTER_X
-            + GRID_SIZE.x as f64
-            + ODD_ROW_OFFSET) as f32,
-        max_x: ((MAP_SIDE_LENGTH_X - 1) as f64 * CENTER_TO_CENTER_X
-            + GRID_SIZE.x as f64
-            + ODD_ROW_OFFSET) as f32,
-        min_y: -((MAP_SIDE_LENGTH_Y - 1) as f64 * CENTER_TO_CENTER_Y + GRID_SIZE.y as f64) as f32,
-        max_y: ((MAP_SIDE_LENGTH_Y - 1) as f64 * CENTER_TO_CENTER_Y + GRID_SIZE.y as f64) as f32,
-        ..Default::default()
-    });
-
     let image_handles = vec![
         asset_server.load("tiles/plains.png"),
         asset_server.load("tiles/grassland.png"),
@@ -909,6 +912,25 @@ fn post_spawn_tilemap(
             .id();
         river_tile_storage.set(&tile_pos, tile_entity);
     }
+}
+
+fn spawn_camera(mut commands: Commands) {
+    commands.spawn(Camera2dBundle::default()).insert(PanCam {
+        grab_buttons: vec![MouseButton::Left],
+        move_keys: DirectionKeys::arrows_and_wasd(),
+        zoom_to_cursor: true,
+        min_scale: 1.0,
+        max_scale: 10.0,
+        min_x: -((MAP_SIDE_LENGTH_X - 1) as f64 * CENTER_TO_CENTER_X
+            + GRID_SIZE.x as f64
+            + ODD_ROW_OFFSET) as f32,
+        max_x: ((MAP_SIDE_LENGTH_X - 1) as f64 * CENTER_TO_CENTER_X
+            + GRID_SIZE.x as f64
+            + ODD_ROW_OFFSET) as f32,
+        min_y: -((MAP_SIDE_LENGTH_Y - 1) as f64 * CENTER_TO_CENTER_Y + GRID_SIZE.y as f64) as f32,
+        max_y: ((MAP_SIDE_LENGTH_Y - 1) as f64 * CENTER_TO_CENTER_Y + GRID_SIZE.y as f64) as f32,
+        ..Default::default()
+    });
 }
 
 #[allow(clippy::type_complexity)]
@@ -1369,37 +1391,116 @@ fn mark_active_unit_fortified(
     }
 }
 
-#[cfg(debug_assertions)]
-#[allow(clippy::type_complexity)]
-fn show_tile_labels(
-    world: &mut World,
-    tile_label_query: &mut QueryState<(), With<TileLabel>>,
-    system_state: &mut SystemState<(Query<&TileLabel>, Query<&mut Visibility, With<Text>>)>,
+/// Keeps the cursor position updated based on any [`CursorMoved`] events.
+fn update_cursor_pos(
+    camera_query: Query<(&GlobalTransform, &Camera)>,
+    mut cursor_moved_events: EventReader<CursorMoved>,
+    mut cursor_pos: ResMut<CursorPos>,
 ) {
-    if tile_label_query.iter(world).next().is_none() {
-        world.run_system_once(spawn_tile_labels);
-    }
-
-    {
-        let (tile_label_query, mut text_query) = system_state.get_mut(world);
-
-        for tile_label in tile_label_query.iter() {
-            if let Ok(mut visibility) = text_query.get_mut(tile_label.0) {
-                *visibility = Visibility::Visible;
+    for cursor_moved in cursor_moved_events.read() {
+        // To get the mouse's world position, we have to transform its window position
+        // by any transforms on the camera. This is done by projecting the
+        // cursor position into camera space (world space).
+        for (camera_transform, camera) in camera_query.iter() {
+            if let Some(pos) = camera.viewport_to_world_2d(camera_transform, cursor_moved.position)
+            {
+                *cursor_pos = CursorPos(pos);
             }
         }
     }
 }
 
-#[cfg(debug_assertions)]
-fn hide_tile_labels(
-    tile_label_query: Query<&TileLabel>,
-    mut text_query: Query<&mut Visibility, With<Text>>,
+/// Checks which tile the cursor is hovered over.
+fn update_cursor_tile_pos(
+    mut commands: Commands,
+    cursor_pos: Res<CursorPos>,
+    tilemap_query: Query<
+        (&TilemapSize, &TilemapGridSize, &TilemapType, &Transform),
+        With<BaseTerrainLayer>,
+    >,
 ) {
-    for tile_label in tile_label_query.iter() {
-        if let Ok(mut visibility) = text_query.get_mut(tile_label.0) {
-            *visibility = Visibility::Hidden;
-        }
+    let (map_size, grid_size, map_type, map_transform) = tilemap_query.get_single().unwrap();
+    // Grab the cursor position from the `Res<CursorPos>`
+    let cursor_pos: Vec2 = cursor_pos.0;
+    // We need to make sure that the cursor's world position is correct relative to
+    // the map due to any map transformation.
+    let cursor_in_map_pos: Vec2 = {
+        // Extend the cursor_pos vec3 by 0.0 and 1.0
+        let cursor_pos = Vec4::from((cursor_pos, 0.0, 1.0));
+        let cursor_in_map_pos = map_transform.compute_matrix().inverse() * cursor_pos;
+        cursor_in_map_pos.xy()
+    };
+    // Once we have a world position we can transform it into a possible tile
+    // position.
+    if let Some(tile_pos) =
+        TilePos::from_world_pos(&cursor_in_map_pos, map_size, grid_size, map_type)
+    {
+        commands.insert_resource(CursorTilePos(tile_pos));
+    } else {
+        // Cursor is not hovering over any tile.
+        commands.remove_resource::<CursorTilePos>();
+    }
+}
+
+#[allow(clippy::type_complexity)]
+fn update_unit_selection(
+    mut commands: Commands,
+    cursor_tile_pos: Option<Res<CursorTilePos>>,
+    mut unit_selection_tilemap_query: Query<
+        (Entity, &mut TileStorage),
+        (With<UnitSelectionLayer>, Without<UnitStateLayer>),
+    >,
+    unit_state_tilemap_query: Query<
+        &TileStorage,
+        (With<UnitStateLayer>, Without<UnitSelectionLayer>),
+    >,
+    mut unit_selection_tile_query: Query<
+        (&mut TilePos, &TileTextureIndex),
+        (With<UnitSelectionLayer>, Without<UnitStateLayer>),
+    >,
+) {
+    let Some(cursor_tile_pos) = cursor_tile_pos else {
+        // No tile position from cursor.
+        return;
+    };
+    let unit_state_tile_storage = unit_state_tilemap_query.get_single().unwrap();
+    // TODO: Restrict to the units controlled by the current player.
+    let Some(_unit_state_tile_entity) = unit_state_tile_storage.get(&cursor_tile_pos.0) else {
+        // No unit present at this tile position.
+        return;
+    };
+    let active_unit_tile_pos =
+        unit_selection_tile_query
+            .iter_mut()
+            .find_map(|(tile_pos, &tile_texture)| {
+                if tile_texture.0 == UnitSelection::Active.into() {
+                    Some(tile_pos)
+                } else {
+                    None
+                }
+            });
+
+    if let Some(mut active_unit_tile_pos) = active_unit_tile_pos {
+        // Move the unit selection tile to under the cursor.
+
+        *active_unit_tile_pos = cursor_tile_pos.0;
+    } else {
+        // Spawn a new unit selection tile, since there was no currently active unit.
+
+        let (tilemap_entity, mut tile_storage) =
+            unit_selection_tilemap_query.get_single_mut().unwrap();
+
+        let tile_pos = cursor_tile_pos.0;
+        let tile_entity = commands
+            .spawn(TileBundle {
+                position: tile_pos,
+                tilemap_id: TilemapId(tilemap_entity),
+                texture_index: TileTextureIndex(UnitSelection::Active.into()),
+                ..Default::default()
+            })
+            .insert(UnitSelectionLayer)
+            .id();
+        tile_storage.set(&tile_pos, tile_entity);
     }
 }
 
@@ -1445,40 +1546,46 @@ fn spawn_tile_labels(
     }
 }
 
-/// Keeps the cursor position updated based on any `CursorMoved` events.
-fn update_cursor_pos(
-    camera_query: Query<(&GlobalTransform, &Camera)>,
-    mut cursor_moved_events: EventReader<CursorMoved>,
-    mut cursor_pos: ResMut<CursorPos>,
+#[cfg(debug_assertions)]
+#[allow(clippy::type_complexity)]
+fn show_tile_labels(
+    world: &mut World,
+    tile_label_query: &mut QueryState<(), With<TileLabel>>,
+    system_state: &mut SystemState<(Query<&TileLabel>, Query<&mut Visibility, With<Text>>)>,
 ) {
-    for cursor_moved in cursor_moved_events.read() {
-        // To get the mouse's world position, we have to transform its window position
-        // by any transforms on the camera. This is done by projecting the
-        // cursor position into camera space (world space).
-        for (camera_transform, camera) in camera_query.iter() {
-            if let Some(pos) = camera.viewport_to_world_2d(camera_transform, cursor_moved.position)
-            {
-                *cursor_pos = CursorPos(pos);
+    if tile_label_query.iter(world).next().is_none() {
+        world.run_system_once(spawn_tile_labels);
+    }
+
+    {
+        let (tile_label_query, mut text_query) = system_state.get_mut(world);
+
+        for tile_label in tile_label_query.iter() {
+            if let Ok(mut visibility) = text_query.get_mut(tile_label.0) {
+                *visibility = Visibility::Visible;
             }
         }
     }
 }
 
-/// Checks which tile the cursor is hovered over.
+#[cfg(debug_assertions)]
+fn hide_tile_labels(
+    tile_label_query: Query<&TileLabel>,
+    mut text_query: Query<&mut Visibility, With<Text>>,
+) {
+    for tile_label in tile_label_query.iter() {
+        if let Ok(mut visibility) = text_query.get_mut(tile_label.0) {
+            *visibility = Visibility::Hidden;
+        }
+    }
+}
+
+/// Highlights the tile position label under the cursor.
 #[cfg(debug_assertions)]
 fn highlight_tile_labels(
     mut commands: Commands,
-    cursor_pos: Res<CursorPos>,
-    tilemap_query: Query<
-        (
-            &TilemapSize,
-            &TilemapGridSize,
-            &TilemapType,
-            &TileStorage,
-            &Transform,
-        ),
-        With<BaseTerrainLayer>,
-    >,
+    cursor_tile_pos: Option<Res<CursorTilePos>>,
+    tilemap_query: Query<&TileStorage, With<BaseTerrainLayer>>,
     highlighted_tiles_query: Query<Entity, With<HighlightedLabel>>,
     tile_label_query: Query<&TileLabel>,
     mut text_query: Query<&mut Text>,
@@ -1497,25 +1604,10 @@ fn highlight_tile_labels(
         }
     }
 
-    let (map_size, grid_size, map_type, tile_storage, map_transform) =
-        tilemap_query.get_single().unwrap();
-    // Grab the cursor position from the `Res<CursorPos>`
-    let cursor_pos: Vec2 = cursor_pos.0;
-    // We need to make sure that the cursor's world position is correct relative to
-    // the map due to any map transformation.
-    let cursor_in_map_pos: Vec2 = {
-        // Extend the cursor_pos vec3 by 0.0 and 1.0
-        let cursor_pos = Vec4::from((cursor_pos, 0.0, 1.0));
-        let cursor_in_map_pos = map_transform.compute_matrix().inverse() * cursor_pos;
-        cursor_in_map_pos.xy()
-    };
-    // Once we have a world position we can transform it into a possible tile
-    // position.
-    if let Some(tile_pos) =
-        TilePos::from_world_pos(&cursor_in_map_pos, map_size, grid_size, map_type)
-    {
+    let tile_storage = tilemap_query.get_single().unwrap();
+    if let Some(cursor_tile_pos) = cursor_tile_pos {
         // Highlight the relevant tile's label
-        if let Some(tile_entity) = tile_storage.get(&tile_pos) {
+        if let Some(tile_entity) = tile_storage.get(&cursor_tile_pos.0) {
             if let Ok(label) = tile_label_query.get(tile_entity) {
                 if let Ok(mut tile_text) = text_query.get_mut(label.0) {
                     for section in tile_text.sections.iter_mut() {
