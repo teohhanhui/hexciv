@@ -164,11 +164,14 @@ enum UnitSelection {
 #[derive(Copy, Clone, Eq, PartialEq)]
 #[repr(u32)]
 enum UnitState {
-    // LandMilitaryOutOfMoves = 0,
-    LandMilitaryReady = 1,
-    // LandMilitaryReadyOutOfOrders = 2,
-    LandMilitaryFortified = 3,
-    // LandMilitaryFortifiedOutOfOrders = 4,
+    // CivilianOutOfMoves = 0,
+    CivilianReady = 1,
+    // CivilianReadyOutOfOrders = 2,
+    // LandMilitaryOutOfMoves = 3,
+    LandMilitaryReady = 4,
+    // LandMilitaryReadyOutOfOrders = 5,
+    LandMilitaryFortified = 6,
+    // LandMilitaryFortifiedOutOfOrders = 7,
 }
 
 #[derive(Copy, Clone)]
@@ -179,9 +182,14 @@ enum UnitStateModifier {
 
 #[derive(Copy, Clone, Eq, PartialEq)]
 #[repr(u32)]
-enum LandMilitaryUnit {
+enum CivilianUnit {
     Settler = 0,
-    Warrior = 1,
+}
+
+#[derive(Copy, Clone, Eq, PartialEq)]
+#[repr(u32)]
+enum LandMilitaryUnit {
+    Warrior = 0,
 }
 
 enum EarthLatitude {
@@ -220,6 +228,9 @@ struct UnitSelectionLayer;
 
 #[derive(Component)]
 struct UnitStateLayer;
+
+#[derive(Component)]
+struct CivilianUnitLayer;
 
 #[derive(Component)]
 struct LandMilitaryUnitLayer;
@@ -287,6 +298,10 @@ impl UnitSelectionLayer {
 
 impl UnitStateLayer {
     const Z_INDEX: f32 = 5.0;
+}
+
+impl CivilianUnitLayer {
+    const Z_INDEX: f32 = 6.0;
 }
 
 impl LandMilitaryUnitLayer {
@@ -864,6 +879,9 @@ fn spawn_starting_units(
     let unit_selection_texture_vec = TilemapTexture::Vector(image_handles);
 
     let image_handles = vec![
+        asset_server.load("units/civilian-out-of-moves.png"),
+        asset_server.load("units/civilian-ready.png"),
+        asset_server.load("units/civilian-ready-out-of-orders.png"),
         asset_server.load("units/land-military-out-of-moves.png"),
         asset_server.load("units/land-military-ready.png"),
         asset_server.load("units/land-military-ready-out-of-orders.png"),
@@ -872,10 +890,10 @@ fn spawn_starting_units(
     ];
     let unit_state_texture_vec = TilemapTexture::Vector(image_handles);
 
-    let image_handles = vec![
-        asset_server.load("units/settler.png"),
-        asset_server.load("units/warrior.png"),
-    ];
+    let image_handles = vec![asset_server.load("units/settler.png")];
+    let civilian_unit_texture_vec = TilemapTexture::Vector(image_handles);
+
+    let image_handles = vec![asset_server.load("units/warrior.png")];
     let land_military_unit_texture_vec = TilemapTexture::Vector(image_handles);
 
     let rng = &mut game_rng.0;
@@ -936,6 +954,8 @@ fn spawn_starting_units(
 
     let mut unit_state_tile_storage = TileStorage::empty(*map_size);
     let unit_state_tilemap_entity = commands.spawn_empty().id();
+    let mut civilian_unit_tile_storage = TileStorage::empty(*map_size);
+    let civilian_unit_tilemap_entity = commands.spawn_empty().id();
     let mut land_military_unit_tile_storage = TileStorage::empty(*map_size);
     let land_military_unit_tilemap_entity = commands.spawn_empty().id();
 
@@ -945,7 +965,7 @@ fn spawn_starting_units(
             .spawn(TileBundle {
                 position: settler_tile_pos,
                 tilemap_id: TilemapId(unit_state_tilemap_entity),
-                texture_index: TileTextureIndex(UnitState::LandMilitaryReady as u32),
+                texture_index: TileTextureIndex(UnitState::CivilianReady as u32),
                 color: TileColor(civ.colors()[0].into()),
                 ..Default::default()
             })
@@ -955,14 +975,14 @@ fn spawn_starting_units(
         let tile_entity = commands
             .spawn(TileBundle {
                 position: settler_tile_pos,
-                tilemap_id: TilemapId(land_military_unit_tilemap_entity),
-                texture_index: TileTextureIndex(LandMilitaryUnit::Settler as u32),
+                tilemap_id: TilemapId(civilian_unit_tilemap_entity),
+                texture_index: TileTextureIndex(CivilianUnit::Settler as u32),
                 color: TileColor(civ.colors()[1].into()),
                 ..Default::default()
             })
-            .insert(LandMilitaryUnitLayer)
+            .insert(CivilianUnitLayer)
             .id();
-        land_military_unit_tile_storage.set(&settler_tile_pos, tile_entity);
+        civilian_unit_tile_storage.set(&settler_tile_pos, tile_entity);
     }
 
     // Spawn warrior.
@@ -1027,6 +1047,21 @@ fn spawn_starting_units(
         .insert(UnitStateLayer);
 
     commands
+        .entity(civilian_unit_tilemap_entity)
+        .insert(TilemapBundle {
+            grid_size: GRID_SIZE,
+            size: *map_size,
+            storage: civilian_unit_tile_storage,
+            texture: civilian_unit_texture_vec,
+            tile_size: TILE_SIZE,
+            map_type: MAP_TYPE,
+            transform: get_tilemap_center_transform(map_size, &GRID_SIZE, &MAP_TYPE, 0.0)
+                * Transform::from_xyz(0.0, 0.0, CivilianUnitLayer::Z_INDEX),
+            ..Default::default()
+        })
+        .insert(CivilianUnitLayer);
+
+    commands
         .entity(land_military_unit_tilemap_entity)
         .insert(TilemapBundle {
             grid_size: GRID_SIZE,
@@ -1061,12 +1096,10 @@ fn cycle_ready_unit(
     // TODO: Restrict to the units controlled by the current player.
     let ready_unit_tile_positions: IndexSet<_> = unit_state_tile_query
         .iter()
-        .filter_map(|(&tile_pos, &tile_texture)| {
-            if tile_texture.0 == UnitState::LandMilitaryReady as u32 {
-                Some(tile_pos)
-            } else {
-                None
-            }
+        .filter_map(|(&tile_pos, &tile_texture)| match tile_texture {
+            TileTextureIndex(t) if t == UnitState::CivilianReady as u32 => Some(tile_pos),
+            TileTextureIndex(t) if t == UnitState::LandMilitaryReady as u32 => Some(tile_pos),
+            _ => None,
         })
         .collect();
     if ready_unit_tile_positions.is_empty() {
@@ -1194,6 +1227,10 @@ fn mark_active_unit_out_of_orders(
     for (tile_pos, mut tile_texture) in unit_state_tile_query.iter_mut() {
         if *tile_pos == active_unit_tile_pos {
             match *tile_texture {
+                TileTextureIndex(t) if t == UnitState::CivilianReady as u32 => {
+                    tile_texture.0 =
+                        UnitState::CivilianReady as u32 + UnitStateModifier::OutOfOrders as u32;
+                },
                 TileTextureIndex(t) if t == UnitState::LandMilitaryReady as u32 => {
                     tile_texture.0 =
                         UnitState::LandMilitaryReady as u32 + UnitStateModifier::OutOfOrders as u32;
