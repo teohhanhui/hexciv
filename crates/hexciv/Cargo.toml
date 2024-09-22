@@ -23,6 +23,7 @@ leafwing-input-manager = { workspace = true, features = ["asset", "keyboard", "m
 log = { workspace = true, features = ["max_level_debug", "release_max_level_warn"] }
 num_enum = { workspace = true, features = ["std"] }
 ordered-float = { workspace = true, features = ["std"] }
+pathfinding = { workspace = true, features = [] }
 strum = { workspace = true, features = ["derive", "std"] }
 tracing = { workspace = true, features = ["max_level_debug", "release_max_level_warn"] }
 woodpecker_ui = { workspace = true, features = [], optional = true }
