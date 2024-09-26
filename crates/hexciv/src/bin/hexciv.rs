@@ -14,6 +14,12 @@ use fastrand_contrib::RngExt as _;
 #[cfg(debug_assertions)]
 use hexciv::actions::DebugAction;
 use hexciv::actions::{CursorAction, GlobalAction, UnitAction};
+use hexciv::layers::{
+    BaseTerrainLayer, BaseTerrainLayerFilter, CivilianUnitLayer, CivilianUnitLayerFilter,
+    LandMilitaryUnitLayer, LandMilitaryUnitLayerFilter, RiverLayer, RiverLayerFilter,
+    TerrainFeaturesLayer, TerrainFeaturesLayerFilter, UnitLayersFilter, UnitSelectionLayer,
+    UnitSelectionLayerFilter, UnitStateLayer, UnitStateLayerFilter,
+};
 use hexciv::states::TurnState;
 use hexciv::types::Civilization;
 use hexciv::units::{
@@ -213,27 +219,6 @@ struct CursorPos(Vec2);
 #[derive(Resource)]
 struct CursorTilePos(TilePos);
 
-#[derive(Component)]
-struct BaseTerrainLayer;
-
-#[derive(Component)]
-struct RiverLayer;
-
-#[derive(Component)]
-struct TerrainFeaturesLayer;
-
-#[derive(Component)]
-struct UnitSelectionLayer;
-
-#[derive(Component)]
-struct UnitStateLayer;
-
-#[derive(Component)]
-struct CivilianUnitLayer;
-
-#[derive(Component)]
-struct LandMilitaryUnitLayer;
-
 #[derive(Copy, Clone, Component)]
 struct Unit(Entity);
 
@@ -245,6 +230,10 @@ struct HighlightedLabel;
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, SystemSet)]
 struct SpawnTilemapSet;
+
+trait LayerZIndex {
+    const Z_INDEX: f32;
+}
 
 impl BaseTerrain {
     const HILLS: [Self; 5] = [
@@ -368,27 +357,27 @@ impl Default for CursorPos {
     }
 }
 
-impl RiverLayer {
+impl LayerZIndex for RiverLayer {
     const Z_INDEX: f32 = 1.0;
 }
 
-impl TerrainFeaturesLayer {
+impl LayerZIndex for TerrainFeaturesLayer {
     const Z_INDEX: f32 = 2.0;
 }
 
-impl UnitSelectionLayer {
+impl LayerZIndex for UnitSelectionLayer {
     const Z_INDEX: f32 = 4.0;
 }
 
-impl UnitStateLayer {
+impl LayerZIndex for UnitStateLayer {
     const Z_INDEX: f32 = 5.0;
 }
 
-impl CivilianUnitLayer {
+impl LayerZIndex for CivilianUnitLayer {
     const Z_INDEX: f32 = 6.0;
 }
 
-impl LandMilitaryUnitLayer {
+impl LayerZIndex for LandMilitaryUnitLayer {
     const Z_INDEX: f32 = 6.0;
 }
 
@@ -722,34 +711,13 @@ fn post_spawn_tilemap(
     mut commands: Commands,
     mut map_rng: ResMut<MapRng>,
     map_terrain: Res<MapTerrain>,
-    base_terrain_tilemap_query: Query<
-        (&TilemapSize, &TileStorage),
-        (
-            With<BaseTerrainLayer>,
-            Without<RiverLayer>,
-            Without<TerrainFeaturesLayer>,
-        ),
-    >,
-    mut river_tilemap_query: Query<
-        (Entity, &mut TileStorage),
-        (
-            With<RiverLayer>,
-            Without<BaseTerrainLayer>,
-            Without<TerrainFeaturesLayer>,
-        ),
-    >,
+    base_terrain_tilemap_query: Query<(&TilemapSize, &TileStorage), BaseTerrainLayerFilter>,
+    mut river_tilemap_query: Query<(Entity, &mut TileStorage), RiverLayerFilter>,
     mut terrain_features_tilemap_query: Query<
         (Entity, &mut TileStorage),
-        (
-            With<TerrainFeaturesLayer>,
-            Without<BaseTerrainLayer>,
-            Without<RiverLayer>,
-        ),
+        TerrainFeaturesLayerFilter,
     >,
-    mut base_terrain_tile_query: Query<
-        &mut TileTextureIndex,
-        (With<BaseTerrainLayer>, Without<TerrainFeaturesLayer>),
-    >,
+    mut base_terrain_tile_query: Query<&mut TileTextureIndex, BaseTerrainLayerFilter>,
 ) {
     let rng = &mut map_rng.0;
     let terrain = &map_terrain.0;
@@ -977,22 +945,8 @@ fn spawn_starting_units(
     asset_server: Res<AssetServer>,
     mut next_turn_state: ResMut<NextState<TurnState>>,
     mut game_rng: ResMut<GameRng>,
-    base_terrain_tilemap_query: Query<
-        (&TilemapSize, &TileStorage),
-        (
-            With<BaseTerrainLayer>,
-            Without<RiverLayer>,
-            Without<TerrainFeaturesLayer>,
-        ),
-    >,
-    base_terrain_tile_query: Query<
-        &TileTextureIndex,
-        (
-            With<BaseTerrainLayer>,
-            Without<RiverLayer>,
-            Without<TerrainFeaturesLayer>,
-        ),
-    >,
+    base_terrain_tilemap_query: Query<(&TilemapSize, &TileStorage), BaseTerrainLayerFilter>,
+    base_terrain_tile_query: Query<&TileTextureIndex, BaseTerrainLayerFilter>,
 ) {
     let image_handles = vec![asset_server.load("units/active.png")];
     let unit_selection_texture_vec = TilemapTexture::Vector(image_handles);
@@ -1193,7 +1147,9 @@ fn spawn_starting_units(
 }
 
 #[allow(clippy::type_complexity)]
-fn reset_movement_points(mut unit_tile_query: Query<(&mut MovementPoints, &FullMovementPoints)>) {
+fn reset_movement_points(
+    mut unit_tile_query: Query<(&mut MovementPoints, &FullMovementPoints), UnitLayersFilter>,
+) {
     // TODO: Only reset movement points for units controlled by the current player.
     for (mut movement_points, full_movement_points) in unit_tile_query.iter_mut() {
         movement_points.0 = full_movement_points.0;
@@ -1204,15 +1160,12 @@ fn reset_movement_points(mut unit_tile_query: Query<(&mut MovementPoints, &FullM
 fn cycle_ready_unit(
     mut commands: Commands,
     global_action_state: Res<ActionState<GlobalAction>>,
-    mut unit_selection_tilemap_query: Query<(Entity, &mut TileStorage), With<UnitSelectionLayer>>,
+    mut unit_selection_tilemap_query: Query<(Entity, &mut TileStorage), UnitSelectionLayerFilter>,
     mut unit_selection_tile_query: Query<
         (Entity, &mut TilePos, &TileTextureIndex),
-        (With<UnitSelectionLayer>, Without<UnitStateLayer>),
+        UnitSelectionLayerFilter,
     >,
-    unit_state_tile_query: Query<
-        (&TilePos, &TileTextureIndex, &Unit),
-        (With<UnitStateLayer>, Without<UnitSelectionLayer>),
-    >,
+    unit_state_tile_query: Query<(&TilePos, &TileTextureIndex, &Unit), UnitStateLayerFilter>,
 ) {
     let (unit_selection_tilemap_entity, mut unit_selection_tile_storage) =
         unit_selection_tilemap_query.get_single_mut().unwrap();
@@ -1309,9 +1262,9 @@ fn focus_camera_on_active_unit(
     mut camera_query: Query<&mut Transform, (With<Camera2d>, Without<UnitSelectionLayer>)>,
     unit_selection_tilemap_query: Query<
         (&Transform, &TilemapType, &TilemapGridSize),
-        (With<UnitSelectionLayer>, Without<Camera2d>),
+        (UnitSelectionLayerFilter, Without<Camera2d>),
     >,
-    unit_selection_tile_query: Query<(&TilePos, &TileTextureIndex), With<UnitSelectionLayer>>,
+    unit_selection_tile_query: Query<(&TilePos, &TileTextureIndex), UnitSelectionLayerFilter>,
 ) {
     let mut camera_transform = camera_query.get_single_mut().unwrap();
     let (map_transform, map_type, grid_size) = unit_selection_tilemap_query.get_single().unwrap();
@@ -1329,14 +1282,8 @@ fn focus_camera_on_active_unit(
 
 #[allow(clippy::type_complexity)]
 fn mark_active_unit_out_of_orders(
-    unit_selection_tile_query: Query<
-        (&TilePos, &TileTextureIndex),
-        (With<UnitSelectionLayer>, Without<UnitStateLayer>),
-    >,
-    mut unit_state_tile_query: Query<
-        (&TilePos, &mut TileTextureIndex),
-        (With<UnitStateLayer>, Without<UnitSelectionLayer>),
-    >,
+    unit_selection_tile_query: Query<(&TilePos, &TileTextureIndex), UnitSelectionLayerFilter>,
+    mut unit_state_tile_query: Query<(&TilePos, &mut TileTextureIndex), UnitStateLayerFilter>,
 ) {
     let Some(active_unit_tile_pos) =
         unit_selection_tile_query
@@ -1383,30 +1330,9 @@ fn mark_active_unit_out_of_orders(
 
 #[allow(clippy::type_complexity)]
 fn mark_active_unit_fortified(
-    unit_selection_tile_query: Query<
-        (&TilePos, &TileTextureIndex),
-        (
-            With<UnitSelectionLayer>,
-            Without<UnitStateLayer>,
-            Without<LandMilitaryUnitLayer>,
-        ),
-    >,
-    mut unit_state_tile_query: Query<
-        (&TilePos, &mut TileTextureIndex),
-        (
-            With<UnitStateLayer>,
-            Without<UnitSelectionLayer>,
-            Without<LandMilitaryUnitLayer>,
-        ),
-    >,
-    land_military_unit_tile_query: Query<
-        &TilePos,
-        (
-            With<LandMilitaryUnitLayer>,
-            Without<UnitSelectionLayer>,
-            Without<UnitStateLayer>,
-        ),
-    >,
+    unit_selection_tile_query: Query<(&TilePos, &TileTextureIndex), UnitSelectionLayerFilter>,
+    mut unit_state_tile_query: Query<(&TilePos, &mut TileTextureIndex), UnitStateLayerFilter>,
+    land_military_unit_tile_query: Query<&TilePos, LandMilitaryUnitLayerFilter>,
 ) {
     let Some(active_unit_tile_pos) =
         unit_selection_tile_query
@@ -1464,7 +1390,7 @@ fn update_cursor_tile_pos(
     cursor_pos: Res<CursorPos>,
     tilemap_query: Query<
         (&TilemapSize, &TilemapGridSize, &TilemapType, &Transform),
-        With<BaseTerrainLayer>,
+        BaseTerrainLayerFilter,
     >,
 ) {
     let (map_size, grid_size, map_type, map_transform) = tilemap_query.get_single().unwrap();
@@ -1494,17 +1420,11 @@ fn update_cursor_tile_pos(
 fn select_unit(
     mut commands: Commands,
     cursor_tile_pos: Option<Res<CursorTilePos>>,
-    mut unit_selection_tilemap_query: Query<
-        (Entity, &mut TileStorage),
-        (With<UnitSelectionLayer>, Without<UnitStateLayer>),
-    >,
-    unit_state_tilemap_query: Query<
-        &TileStorage,
-        (With<UnitStateLayer>, Without<UnitSelectionLayer>),
-    >,
+    mut unit_selection_tilemap_query: Query<(Entity, &mut TileStorage), UnitSelectionLayerFilter>,
+    unit_state_tilemap_query: Query<&TileStorage, UnitStateLayerFilter>,
     mut unit_selection_tile_query: Query<
         (Entity, &mut TilePos, &TileTextureIndex),
-        (With<UnitSelectionLayer>, Without<UnitStateLayer>),
+        UnitSelectionLayerFilter,
     >,
 ) {
     let Some(cursor_tile_pos) = cursor_tile_pos else {
@@ -1555,7 +1475,7 @@ fn select_unit(
 
 fn should_move_active_unit_to(
     cursor_tile_pos: Option<Res<CursorTilePos>>,
-    unit_selection_tile_query: Query<(&TilePos, &TileTextureIndex), With<UnitSelectionLayer>>,
+    unit_selection_tile_query: Query<(&TilePos, &TileTextureIndex), UnitSelectionLayerFilter>,
 ) -> bool {
     let Some(cursor_tile_pos) = cursor_tile_pos else {
         // No tile position from cursor.
@@ -1589,101 +1509,16 @@ fn should_move_active_unit_to(
 fn move_active_unit_to(
     mut _commands: Commands,
     cursor_tile_pos: Res<CursorTilePos>,
-    base_terrain_tilemap_query: Query<
-        (&TilemapSize, &TileStorage),
-        (
-            With<BaseTerrainLayer>,
-            Without<RiverLayer>,
-            Without<TerrainFeaturesLayer>,
-            Without<CivilianUnitLayer>,
-            Without<LandMilitaryUnitLayer>,
-        ),
-    >,
-    river_tilemap_query: Query<
-        &TileStorage,
-        (
-            With<RiverLayer>,
-            Without<BaseTerrainLayer>,
-            Without<TerrainFeaturesLayer>,
-            Without<CivilianUnitLayer>,
-            Without<LandMilitaryUnitLayer>,
-        ),
-    >,
-    terrain_features_tilemap_query: Query<
-        &TileStorage,
-        (
-            With<TerrainFeaturesLayer>,
-            Without<BaseTerrainLayer>,
-            Without<RiverLayer>,
-            Without<CivilianUnitLayer>,
-            Without<LandMilitaryUnitLayer>,
-        ),
-    >,
-    civilian_unit_tilemap_query: Query<
-        &TileStorage,
-        (
-            With<CivilianUnitLayer>,
-            Without<BaseTerrainLayer>,
-            Without<RiverLayer>,
-            Without<TerrainFeaturesLayer>,
-            Without<LandMilitaryUnitLayer>,
-        ),
-    >,
-    land_military_unit_tilemap_query: Query<
-        &TileStorage,
-        (
-            With<LandMilitaryUnitLayer>,
-            Without<BaseTerrainLayer>,
-            Without<RiverLayer>,
-            Without<TerrainFeaturesLayer>,
-            Without<CivilianUnitLayer>,
-        ),
-    >,
-    base_terrain_tile_query: Query<
-        &TileTextureIndex,
-        (
-            With<BaseTerrainLayer>,
-            Without<RiverLayer>,
-            Without<TerrainFeaturesLayer>,
-            Without<UnitSelectionLayer>,
-            Without<CivilianUnitLayer>,
-            Without<LandMilitaryUnitLayer>,
-        ),
-    >,
-    river_tile_query: Query<
-        &TileTextureIndex,
-        (
-            With<RiverLayer>,
-            Without<BaseTerrainLayer>,
-            Without<TerrainFeaturesLayer>,
-            Without<UnitSelectionLayer>,
-            Without<CivilianUnitLayer>,
-            Without<LandMilitaryUnitLayer>,
-        ),
-    >,
-    terrain_features_tile_query: Query<
-        &TileTextureIndex,
-        (
-            With<TerrainFeaturesLayer>,
-            Without<BaseTerrainLayer>,
-            Without<RiverLayer>,
-            Without<UnitSelectionLayer>,
-            Without<CivilianUnitLayer>,
-            Without<LandMilitaryUnitLayer>,
-        ),
-    >,
-    unit_selection_tile_query: Query<
-        (&TilePos, &TileTextureIndex),
-        (
-            With<UnitSelectionLayer>,
-            Without<BaseTerrainLayer>,
-            Without<RiverLayer>,
-            Without<TerrainFeaturesLayer>,
-            Without<CivilianUnitLayer>,
-            Without<LandMilitaryUnitLayer>,
-        ),
-    >,
-    unit_tile_query: Query<(&MovementPoints, &FullMovementPoints)>,
+    base_terrain_tilemap_query: Query<(&TilemapSize, &TileStorage), BaseTerrainLayerFilter>,
+    river_tilemap_query: Query<&TileStorage, RiverLayerFilter>,
+    terrain_features_tilemap_query: Query<&TileStorage, TerrainFeaturesLayerFilter>,
+    civilian_unit_tilemap_query: Query<&TileStorage, CivilianUnitLayerFilter>,
+    land_military_unit_tilemap_query: Query<&TileStorage, LandMilitaryUnitLayerFilter>,
+    base_terrain_tile_query: Query<&TileTextureIndex, BaseTerrainLayerFilter>,
+    river_tile_query: Query<&TileTextureIndex, RiverLayerFilter>,
+    terrain_features_tile_query: Query<&TileTextureIndex, TerrainFeaturesLayerFilter>,
+    unit_selection_tile_query: Query<(&TilePos, &TileTextureIndex), UnitSelectionLayerFilter>,
+    unit_tile_query: Query<(&MovementPoints, &FullMovementPoints), UnitLayersFilter>,
     mut unit_moved_events: EventWriter<UnitMoved>,
 ) {
     let (map_size, base_terrain_tile_storage) = base_terrain_tilemap_query.get_single().unwrap();
@@ -1851,54 +1686,19 @@ fn move_active_unit_to(
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::type_complexity)]
 fn sync_unit_moved(
-    mut unit_selection_tilemap_query: Query<
-        &mut TileStorage,
-        (
-            With<UnitSelectionLayer>,
-            Without<UnitStateLayer>,
-            Without<CivilianUnitLayer>,
-            Without<LandMilitaryUnitLayer>,
-        ),
-    >,
-    mut unit_state_tilemap_query: Query<
-        &mut TileStorage,
-        (
-            With<UnitStateLayer>,
-            Without<UnitSelectionLayer>,
-            Without<CivilianUnitLayer>,
-            Without<LandMilitaryUnitLayer>,
-        ),
-    >,
-    mut civilian_unit_tilemap_query: Query<
-        &mut TileStorage,
-        (
-            With<CivilianUnitLayer>,
-            Without<UnitSelectionLayer>,
-            Without<UnitStateLayer>,
-            Without<LandMilitaryUnitLayer>,
-        ),
-    >,
-    mut land_military_unit_tilemap_query: Query<
-        &mut TileStorage,
-        (
-            With<LandMilitaryUnitLayer>,
-            Without<UnitSelectionLayer>,
-            Without<UnitStateLayer>,
-            Without<CivilianUnitLayer>,
-        ),
-    >,
+    mut unit_selection_tilemap_query: Query<&mut TileStorage, UnitSelectionLayerFilter>,
+    mut unit_state_tilemap_query: Query<&mut TileStorage, UnitStateLayerFilter>,
+    mut civilian_unit_tilemap_query: Query<&mut TileStorage, CivilianUnitLayerFilter>,
+    mut land_military_unit_tilemap_query: Query<&mut TileStorage, LandMilitaryUnitLayerFilter>,
     mut unit_selection_tile_query: Query<
         (Entity, &mut TilePos, &TileTextureIndex),
-        (With<UnitSelectionLayer>, Without<UnitStateLayer>),
+        UnitSelectionLayerFilter,
     >,
     mut unit_state_tile_query: Query<
         (Entity, &mut TilePos, &mut TileTextureIndex, &Unit),
-        (With<UnitStateLayer>, Without<UnitSelectionLayer>),
+        UnitStateLayerFilter,
     >,
-    mut unit_tile_query: Query<
-        (&mut TilePos, &mut MovementPoints),
-        (Without<UnitSelectionLayer>, Without<UnitStateLayer>),
-    >,
+    mut unit_tile_query: Query<(&mut TilePos, &mut MovementPoints), UnitLayersFilter>,
     mut unit_moved_events: EventReader<UnitMoved>,
 ) {
     let mut unit_selection_tile_storage = unit_selection_tilemap_query.get_single_mut().unwrap();
@@ -1996,7 +1796,7 @@ fn spawn_tile_labels(
     mut commands: Commands,
     tilemap_query: Query<
         (&Transform, &TilemapType, &TilemapGridSize, &TileStorage),
-        With<BaseTerrainLayer>,
+        BaseTerrainLayerFilter,
     >,
     tile_query: Query<&mut TilePos>,
     font_handle: Res<FontHandle>,
@@ -2071,7 +1871,7 @@ fn hide_tile_labels(
 fn highlight_tile_labels(
     mut commands: Commands,
     cursor_tile_pos: Option<Res<CursorTilePos>>,
-    tilemap_query: Query<&TileStorage, With<BaseTerrainLayer>>,
+    tilemap_query: Query<&TileStorage, BaseTerrainLayerFilter>,
     highlighted_tiles_query: Query<Entity, With<HighlightedLabel>>,
     tile_label_query: Query<&TileLabel>,
     mut text_query: Query<&mut Text>,
