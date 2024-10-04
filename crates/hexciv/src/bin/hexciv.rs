@@ -1,8 +1,12 @@
+use std::any::TypeId;
+use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::iter;
 use std::ops::Add;
 
 use bevy::color::palettes;
 use bevy::ecs::system::{RunSystemOnce as _, SystemState};
+use bevy::log::LogPlugin;
 use bevy::prelude::*;
 use bevy_ecs_tilemap::helpers::hex_grid::cube::CubePos;
 use bevy_ecs_tilemap::helpers::hex_grid::neighbors::{HexNeighbors, HEX_DIRECTIONS};
@@ -23,8 +27,10 @@ use hexciv::layers::{
 use hexciv::states::TurnState;
 use hexciv::types::Civilization;
 use hexciv::units::{
-    CivilianUnit, CivilianUnitBundle, FullMovementPoints, LandMilitaryUnit, LandMilitaryUnitBundle,
-    MovementPoints, UnitMoved,
+    Civ, CivilianUnit, CivilianUnitBundle, CivilianUnitTileBundle, FullMovementPoints,
+    LandMilitaryUnit, LandMilitaryUnitBundle, LandMilitaryUnitTileBundle, MovementPoints,
+    UnitFilter, UnitId, UnitMoved, UnitSelected, UnitSelection, UnitSelectionTileBundle, UnitState,
+    UnitStateTileBundle, UnitTileBundle, UnitType,
 };
 use indexmap::IndexSet;
 use itertools::{chain, repeat_n, Itertools as _};
@@ -169,25 +175,6 @@ enum TerrainFeatures {
     Ice = 6,
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, IntoPrimitive, TryFromPrimitive)]
-#[repr(u32)]
-enum UnitSelection {
-    Active = 0,
-}
-
-#[derive(Copy, Clone, Eq, PartialEq, IntoPrimitive, TryFromPrimitive)]
-#[repr(u32)]
-enum UnitState {
-    CivilianReady = 0,
-    LandMilitaryReady = 1,
-    LandMilitaryFortified = 2,
-    CivilianReadyOutOfOrders = 3,
-    LandMilitaryReadyOutOfOrders = 4,
-    LandMilitaryFortifiedOutOfOrders = 5,
-    CivilianOutOfMoves = 6,
-    LandMilitaryOutOfMoves = 7,
-}
-
 #[derive(Copy, Clone, IntoPrimitive)]
 #[repr(u32)]
 enum UnitStateModifier {
@@ -218,9 +205,6 @@ struct CursorPos(Vec2);
 
 #[derive(Resource)]
 struct CursorTilePos(TilePos);
-
-#[derive(Copy, Clone, Component)]
-struct Unit(Entity);
 
 #[derive(Component)]
 struct TileLabel(Entity);
@@ -357,6 +341,10 @@ impl Default for CursorPos {
     }
 }
 
+impl LayerZIndex for BaseTerrainLayer {
+    const Z_INDEX: f32 = 0.0;
+}
+
 impl LayerZIndex for RiverLayer {
     const Z_INDEX: f32 = 1.0;
 }
@@ -392,7 +380,25 @@ fn main() {
                 }),
                 ..Default::default()
             })
-            .set(ImagePlugin::default_nearest()),
+            .set(ImagePlugin::default_nearest())
+            .set({
+                #[cfg(debug_assertions)]
+                {
+                    LogPlugin {
+                        level: bevy::log::Level::DEBUG,
+                        filter: "info,wgpu=error,naga=warn,hexciv=debug".to_owned(),
+                        ..Default::default()
+                    }
+                }
+                #[cfg(not(debug_assertions))]
+                {
+                    LogPlugin {
+                        level: bevy::log::Level::WARN,
+                        filter: "warn,wgpu=error,naga=warn,hexciv=warn".to_owned(),
+                        ..Default::default()
+                    }
+                }
+            }),
     )
     .add_plugins((
         InputManagerPlugin::<GlobalAction>::default(),
@@ -412,6 +418,7 @@ fn main() {
     .insert_resource(UnitAction::input_map())
     .insert_resource(CursorAction::input_map())
     .init_state::<TurnState>()
+    .add_event::<UnitSelected>()
     .add_event::<UnitMoved>()
     .add_systems(
         Startup,
@@ -431,21 +438,24 @@ fn main() {
         (
             reset_movement_points,
             cycle_ready_unit,
+            sync_unit_selected,
             focus_camera_on_active_unit,
         )
             .chain(),
     )
     .add_systems(
         Update,
-        (cycle_ready_unit, focus_camera_on_active_unit)
+        (
+            cycle_ready_unit,
+            sync_unit_selected,
+            focus_camera_on_active_unit,
+        )
             .chain()
-            .run_if(action_just_pressed(GlobalAction::PreviousReadyUnit)),
-    )
-    .add_systems(
-        Update,
-        (cycle_ready_unit, focus_camera_on_active_unit)
-            .chain()
-            .run_if(action_just_pressed(GlobalAction::NextReadyUnit)),
+            .run_if(
+                action_just_pressed(GlobalAction::PreviousReadyUnit)
+                    .or_else(action_just_pressed(GlobalAction::NextReadyUnit))
+                    .and_then(has_ready_units),
+            ),
     )
     .add_systems(
         Update,
@@ -458,7 +468,8 @@ fn main() {
     .add_systems(Update, (update_cursor_pos, update_cursor_tile_pos).chain())
     .add_systems(
         Update,
-        select_unit
+        (select_unit, sync_unit_selected)
+            .chain()
             .run_if(action_just_pressed(CursorAction::Click))
             .after(update_cursor_tile_pos),
     )
@@ -615,7 +626,12 @@ fn spawn_tilemap(
             texture: texture_vec,
             tile_size: TILE_SIZE,
             map_type: MAP_TYPE,
-            transform: get_tilemap_center_transform(&map_size, &GRID_SIZE, &MAP_TYPE, 0.0),
+            transform: get_tilemap_center_transform(
+                &map_size,
+                &GRID_SIZE,
+                &MAP_TYPE,
+                BaseTerrainLayer::Z_INDEX,
+            ),
             ..Default::default()
         })
         .insert(BaseTerrainLayer);
@@ -662,8 +678,12 @@ fn spawn_tilemap(
             texture: texture_vec,
             tile_size: TILE_SIZE,
             map_type: MAP_TYPE,
-            transform: get_tilemap_center_transform(&map_size, &GRID_SIZE, &MAP_TYPE, 0.0)
-                * Transform::from_xyz(0.0, 0.0, RiverLayer::Z_INDEX),
+            transform: get_tilemap_center_transform(
+                &map_size,
+                &GRID_SIZE,
+                &MAP_TYPE,
+                RiverLayer::Z_INDEX,
+            ),
             ..Default::default()
         })
         .insert(RiverLayer);
@@ -696,8 +716,12 @@ fn spawn_tilemap(
             texture: texture_vec,
             tile_size: TILE_SIZE,
             map_type: MAP_TYPE,
-            transform: get_tilemap_center_transform(&map_size, &GRID_SIZE, &MAP_TYPE, 0.0)
-                * Transform::from_xyz(0.0, 0.0, TerrainFeaturesLayer::Z_INDEX),
+            transform: get_tilemap_center_transform(
+                &map_size,
+                &GRID_SIZE,
+                &MAP_TYPE,
+                TerrainFeaturesLayer::Z_INDEX,
+            ),
             ..Default::default()
         })
         .insert(TerrainFeaturesLayer);
@@ -706,7 +730,6 @@ fn spawn_tilemap(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::type_complexity)]
 fn post_spawn_tilemap(
     mut commands: Commands,
     mut map_rng: ResMut<MapRng>,
@@ -939,7 +962,6 @@ fn spawn_camera(mut commands: Commands) {
     });
 }
 
-#[allow(clippy::type_complexity)]
 fn spawn_starting_units(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
@@ -977,18 +999,19 @@ fn spawn_starting_units(
     let civ = *rng.choice(Civilization::VARIANTS).unwrap();
 
     let mut allowable_starting_positions = HashSet::new();
-
     for x in 0..map_size.x {
         for y in 0..map_size.y {
             let tile_pos = TilePos { x, y };
-            let tile_entity = base_terrain_tile_storage.get(&tile_pos).unwrap();
-            let tile_texture = *base_terrain_tile_query.get(tile_entity).unwrap();
+            let base_terrain_tile_entity = base_terrain_tile_storage.get(&tile_pos).unwrap();
+            let base_terrain_tile_texture = base_terrain_tile_query
+                .get(base_terrain_tile_entity)
+                .unwrap();
 
             if [BaseTerrain::Ocean, BaseTerrain::Coast]
                 .into_iter()
                 .chain(BaseTerrain::MOUNTAINS)
                 .map(u32::from)
-                .contains(&tile_texture.0)
+                .contains(&base_terrain_tile_texture.0)
             {
                 continue;
             }
@@ -997,27 +1020,33 @@ fn spawn_starting_units(
         }
     }
 
-    let mut settler_tile_pos;
-    let warrior_tile_pos;
-    loop {
-        settler_tile_pos = *rng
-            .choice(&allowable_starting_positions)
-            .expect("the map should have enough land tiles");
-        let neighbor_positions: HashSet<_> =
-            HexNeighbors::get_neighboring_positions_row_odd(&settler_tile_pos, map_size)
-                .iter()
+    let (settler_tile_pos, warrior_tile_pos) = {
+        let rng = RefCell::new(rng);
+        iter::from_fn({
+            let rng = &rng;
+            let mut allowable_starting_positions = allowable_starting_positions.clone();
+            move || {
+                let settler_tile_pos = *rng.borrow_mut().choice(&allowable_starting_positions)?;
+                allowable_starting_positions.remove(&settler_tile_pos);
+                Some(settler_tile_pos)
+            }
+        })
+        .find_map(|settler_tile_pos| {
+            let neighbor_positions: HashSet<_> =
+                HexNeighbors::get_neighboring_positions_row_odd(&settler_tile_pos, map_size)
+                    .iter()
+                    .copied()
+                    .collect();
+            let allowable_neighbor_positions: HashSet<_> = neighbor_positions
+                .intersection(&allowable_starting_positions)
                 .copied()
                 .collect();
-        let allowable_neighbors: HashSet<_> = neighbor_positions
-            .intersection(&allowable_starting_positions)
-            .copied()
-            .collect();
-        if allowable_neighbors.is_empty() {
-            continue;
-        }
-        warrior_tile_pos = *rng.choice(&allowable_neighbors).unwrap();
-        break;
-    }
+            rng.borrow_mut()
+                .choice(allowable_neighbor_positions)
+                .map(|warrior_tile_pos| (settler_tile_pos, warrior_tile_pos))
+        })
+        .expect("the map should have enough land tiles to spawn starting units")
+    };
 
     let mut unit_state_tile_storage = TileStorage::empty(*map_size);
     let unit_state_tilemap_entity = commands.spawn_empty().id();
@@ -1028,52 +1057,64 @@ fn spawn_starting_units(
 
     // Spawn settler.
     {
-        let unit_tile_entity = commands
+        let civilian_unit = CivilianUnit::Settler;
+        let unit_entity = commands
             .spawn(CivilianUnitBundle::new(
                 settler_tile_pos,
-                TilemapId(civilian_unit_tilemap_entity),
                 civ,
-                CivilianUnit::Settler,
+                civilian_unit,
             ))
-            .insert(CivilianUnitLayer)
             .id();
-        civilian_unit_tile_storage.set(&settler_tile_pos, unit_tile_entity);
         let tile_entity = commands
-            .spawn(TileBundle {
-                position: settler_tile_pos,
-                tilemap_id: TilemapId(unit_state_tilemap_entity),
-                texture_index: TileTextureIndex(UnitState::CivilianReady.into()),
-                color: TileColor(civ.colors()[0].into()),
-                ..Default::default()
-            })
-            .insert(Unit(unit_tile_entity))
-            .insert(UnitStateLayer)
+            .spawn(CivilianUnitTileBundle::new(
+                settler_tile_pos,
+                civilian_unit,
+                civ,
+                TilemapId(civilian_unit_tilemap_entity),
+                UnitId(unit_entity),
+            ))
+            .id();
+        civilian_unit_tile_storage.set(&settler_tile_pos, tile_entity);
+        let tile_entity = commands
+            .spawn(UnitStateTileBundle::new(
+                settler_tile_pos,
+                UnitType::Civilian(civilian_unit),
+                civ,
+                TilemapId(unit_state_tilemap_entity),
+                UnitId(unit_entity),
+            ))
             .id();
         unit_state_tile_storage.set(&settler_tile_pos, tile_entity);
     }
 
     // Spawn warrior.
     {
-        let unit_tile_entity = commands
+        let land_military_unit = LandMilitaryUnit::Warrior;
+        let unit_entity = commands
             .spawn(LandMilitaryUnitBundle::new(
                 warrior_tile_pos,
-                TilemapId(land_military_unit_tilemap_entity),
                 civ,
-                LandMilitaryUnit::Warrior,
+                land_military_unit,
             ))
-            .insert(LandMilitaryUnitLayer)
             .id();
-        land_military_unit_tile_storage.set(&warrior_tile_pos, unit_tile_entity);
         let tile_entity = commands
-            .spawn(TileBundle {
-                position: warrior_tile_pos,
-                tilemap_id: TilemapId(unit_state_tilemap_entity),
-                texture_index: TileTextureIndex(UnitState::LandMilitaryReady.into()),
-                color: TileColor(civ.colors()[0].into()),
-                ..Default::default()
-            })
-            .insert(Unit(unit_tile_entity))
-            .insert(UnitStateLayer)
+            .spawn(LandMilitaryUnitTileBundle::new(
+                warrior_tile_pos,
+                land_military_unit,
+                civ,
+                TilemapId(land_military_unit_tilemap_entity),
+                UnitId(unit_entity),
+            ))
+            .id();
+        land_military_unit_tile_storage.set(&warrior_tile_pos, tile_entity);
+        let tile_entity = commands
+            .spawn(UnitStateTileBundle::new(
+                warrior_tile_pos,
+                UnitType::LandMilitary(land_military_unit),
+                civ,
+                TilemapId(unit_state_tilemap_entity),
+                UnitId(unit_entity),
+            ))
             .id();
         unit_state_tile_storage.set(&warrior_tile_pos, tile_entity);
     }
@@ -1091,8 +1132,12 @@ fn spawn_starting_units(
                 texture: unit_selection_texture_vec,
                 tile_size: TILE_SIZE,
                 map_type: MAP_TYPE,
-                transform: get_tilemap_center_transform(map_size, &GRID_SIZE, &MAP_TYPE, 0.0)
-                    * Transform::from_xyz(0.0, 0.0, UnitSelectionLayer::Z_INDEX),
+                transform: get_tilemap_center_transform(
+                    map_size,
+                    &GRID_SIZE,
+                    &MAP_TYPE,
+                    UnitSelectionLayer::Z_INDEX,
+                ),
                 ..Default::default()
             })
             .insert(UnitSelectionLayer);
@@ -1107,8 +1152,12 @@ fn spawn_starting_units(
             texture: unit_state_texture_vec,
             tile_size: TILE_SIZE,
             map_type: MAP_TYPE,
-            transform: get_tilemap_center_transform(map_size, &GRID_SIZE, &MAP_TYPE, 0.0)
-                * Transform::from_xyz(0.0, 0.0, UnitStateLayer::Z_INDEX),
+            transform: get_tilemap_center_transform(
+                map_size,
+                &GRID_SIZE,
+                &MAP_TYPE,
+                UnitStateLayer::Z_INDEX,
+            ),
             ..Default::default()
         })
         .insert(UnitStateLayer);
@@ -1122,8 +1171,12 @@ fn spawn_starting_units(
             texture: civilian_unit_texture_vec,
             tile_size: TILE_SIZE,
             map_type: MAP_TYPE,
-            transform: get_tilemap_center_transform(map_size, &GRID_SIZE, &MAP_TYPE, 0.0)
-                * Transform::from_xyz(0.0, 0.0, CivilianUnitLayer::Z_INDEX),
+            transform: get_tilemap_center_transform(
+                map_size,
+                &GRID_SIZE,
+                &MAP_TYPE,
+                CivilianUnitLayer::Z_INDEX,
+            ),
             ..Default::default()
         })
         .insert(CivilianUnitLayer);
@@ -1137,8 +1190,12 @@ fn spawn_starting_units(
             texture: land_military_unit_texture_vec,
             tile_size: TILE_SIZE,
             map_type: MAP_TYPE,
-            transform: get_tilemap_center_transform(map_size, &GRID_SIZE, &MAP_TYPE, 0.0)
-                * Transform::from_xyz(0.0, 0.0, LandMilitaryUnitLayer::Z_INDEX),
+            transform: get_tilemap_center_transform(
+                map_size,
+                &GRID_SIZE,
+                &MAP_TYPE,
+                LandMilitaryUnitLayer::Z_INDEX,
+            ),
             ..Default::default()
         })
         .insert(LandMilitaryUnitLayer);
@@ -1146,118 +1203,114 @@ fn spawn_starting_units(
     next_turn_state.set(TurnState::Playing);
 }
 
-#[allow(clippy::type_complexity)]
 fn reset_movement_points(
-    mut unit_tile_query: Query<(&mut MovementPoints, &FullMovementPoints), UnitLayersFilter>,
+    mut unit_query: Query<(&mut MovementPoints, &FullMovementPoints), UnitFilter>,
 ) {
     // TODO: Only reset movement points for units controlled by the current player.
-    for (mut movement_points, full_movement_points) in unit_tile_query.iter_mut() {
+    for (mut movement_points, full_movement_points) in unit_query.iter_mut() {
         movement_points.0 = full_movement_points.0;
     }
 }
 
-#[allow(clippy::type_complexity)]
+fn has_ready_units(unit_query: Query<(Entity, &TilePos, &UnitState), UnitFilter>) -> bool {
+    // TODO: Restrict to the units controlled by the current player.
+    let ready_units: IndexSet<_> = unit_query
+        .iter()
+        .filter_map(|(unit_entity, tile_pos, unit_state)| match unit_state {
+            UnitState::CivilianReady => Some((unit_entity, *tile_pos)),
+            UnitState::LandMilitaryReady => Some((unit_entity, *tile_pos)),
+            _ => None,
+        })
+        .collect();
+    if ready_units.is_empty() {
+        // There are no ready units to cycle to.
+        return false;
+    }
+
+    true
+}
+
 fn cycle_ready_unit(
-    mut commands: Commands,
     global_action_state: Res<ActionState<GlobalAction>>,
-    mut unit_selection_tilemap_query: Query<(Entity, &mut TileStorage), UnitSelectionLayerFilter>,
-    mut unit_selection_tile_query: Query<
-        (Entity, &mut TilePos, &TileTextureIndex),
+    unit_selection_tile_query: Query<
+        (&TilePos, &TileTextureIndex, &UnitId),
         UnitSelectionLayerFilter,
     >,
-    unit_state_tile_query: Query<(&TilePos, &TileTextureIndex, &Unit), UnitStateLayerFilter>,
+    unit_query: Query<(Entity, &TilePos, &UnitState), UnitFilter>,
+    mut unit_selected_events: EventWriter<UnitSelected>,
 ) {
-    let (unit_selection_tilemap_entity, mut unit_selection_tile_storage) =
-        unit_selection_tilemap_query.get_single_mut().unwrap();
-
-    // TODO: Handle the case of multiple units in the same tile position.
     // TODO: Restrict to the units controlled by the current player.
-    let ready_unit_tile_positions: IndexSet<_> = unit_state_tile_query
+    let ready_units: IndexSet<_> = unit_query
         .iter()
-        .filter_map(
-            |(tile_pos, &tile_texture, Unit(_tile_entity))| match tile_texture {
-                TileTextureIndex(t) if t == UnitState::CivilianReady.into() => Some(*tile_pos),
-                TileTextureIndex(t) if t == UnitState::LandMilitaryReady.into() => Some(*tile_pos),
-                _ => None,
-            },
-        )
+        .filter_map(|(unit_entity, tile_pos, unit_state)| match unit_state {
+            UnitState::CivilianReady => Some((unit_entity, *tile_pos)),
+            UnitState::LandMilitaryReady => Some((unit_entity, *tile_pos)),
+            _ => None,
+        })
         .collect();
-    if ready_unit_tile_positions.is_empty() {
+    if ready_units.is_empty() {
         // There are no ready units to cycle to.
         return;
     }
     let active_unit_selection =
         unit_selection_tile_query
-            .iter_mut()
-            .find_map(|(tile_entity, tile_pos, &tile_texture)| {
-                if tile_texture.0 == UnitSelection::Active.into() {
-                    Some((tile_entity, tile_pos))
-                } else {
-                    None
-                }
+            .iter()
+            .find(|(_tile_pos, &tile_texture, _unit_id)| {
+                matches!(tile_texture, TileTextureIndex(t) if t == UnitSelection::Active.into())
             });
 
-    if let Some((tile_entity, mut active_unit_tile_pos)) = active_unit_selection {
-        // Move the unit selection tile to the previous / next ready unit.
+    if let Some((_active_unit_tile_pos, _tile_texture, UnitId(active_unit_entity))) =
+        active_unit_selection
+    {
+        // Select the previous / next ready unit.
 
-        // TODO: Handle the case of multiple units in the same tile position.
         // TODO: Restrict to the units controlled by the current player.
-        let unit_tile_positions: Vec<_> = unit_state_tile_query
+        let units: Vec<_> = unit_query
             .iter()
-            .map(|(&tile_pos, _tile_texture, Unit(_unit_tile_entity))| tile_pos)
+            .map(|(unit_entity, &tile_pos, _unit_state)| (unit_entity, tile_pos))
             .collect();
 
         if global_action_state.just_pressed(&GlobalAction::PreviousReadyUnit) {
-            let previous_unit_tile_positions: IndexSet<_> = unit_tile_positions
+            let previous_units: IndexSet<_> = units
                 .into_iter()
                 .rev()
-                .skip_while(|&tile_pos| tile_pos != *active_unit_tile_pos)
+                .skip_while(|(unit_entity, _tile_pos)| unit_entity != active_unit_entity)
                 .skip(1)
                 .collect();
-            if let Some(tile_pos) = previous_unit_tile_positions
-                .intersection(&ready_unit_tile_positions)
-                .next()
+            if let Some((unit_entity, tile_pos)) = previous_units.intersection(&ready_units).next()
             {
-                unit_selection_tile_storage.remove(&active_unit_tile_pos);
-                *active_unit_tile_pos = *tile_pos;
-                unit_selection_tile_storage.set(tile_pos, tile_entity);
+                unit_selected_events.send(UnitSelected {
+                    entity: *unit_entity,
+                    position: *tile_pos,
+                });
             }
         } else if global_action_state.just_pressed(&GlobalAction::NextReadyUnit) {
-            let next_unit_tile_positions: IndexSet<_> = unit_tile_positions
+            let next_units: IndexSet<_> = units
                 .into_iter()
-                .skip_while(|&tile_pos| tile_pos != *active_unit_tile_pos)
+                .skip_while(|(unit_entity, _tile_pos)| unit_entity != active_unit_entity)
                 .skip(1)
                 .collect();
-            if let Some(tile_pos) = next_unit_tile_positions
-                .intersection(&ready_unit_tile_positions)
-                .next()
-            {
-                unit_selection_tile_storage.remove(&active_unit_tile_pos);
-                *active_unit_tile_pos = *tile_pos;
-                unit_selection_tile_storage.set(tile_pos, tile_entity);
+            if let Some((unit_entity, tile_pos)) = next_units.intersection(&ready_units).next() {
+                unit_selected_events.send(UnitSelected {
+                    entity: *unit_entity,
+                    position: *tile_pos,
+                });
             }
         } else {
             // Not cycling units.
             return;
         }
     } else {
-        // Spawn a new unit selection tile, since there was no currently active unit.
+        // Select the first ready unit, since there was no currently active unit.
 
-        let tile_pos = ready_unit_tile_positions[0];
-        let tile_entity = commands
-            .spawn(TileBundle {
-                position: tile_pos,
-                tilemap_id: TilemapId(unit_selection_tilemap_entity),
-                texture_index: TileTextureIndex(UnitSelection::Active.into()),
-                ..Default::default()
-            })
-            .insert(UnitSelectionLayer)
-            .id();
-        unit_selection_tile_storage.set(&tile_pos, tile_entity);
+        let (unit_entity, tile_pos) = ready_units[0];
+        unit_selected_events.send(UnitSelected {
+            entity: unit_entity,
+            position: tile_pos,
+        });
     }
 }
 
-#[allow(clippy::type_complexity)]
 fn focus_camera_on_active_unit(
     mut camera_query: Query<&mut Transform, (With<Camera2d>, Without<UnitSelectionLayer>)>,
     unit_selection_tilemap_query: Query<
@@ -1268,101 +1321,115 @@ fn focus_camera_on_active_unit(
 ) {
     let mut camera_transform = camera_query.get_single_mut().unwrap();
     let (map_transform, map_type, grid_size) = unit_selection_tilemap_query.get_single().unwrap();
-    for (tile_pos, tile_texture) in unit_selection_tile_query.iter() {
-        if tile_texture.0 == UnitSelection::Active.into() {
-            let tile_center = tile_pos
-                .center_in_world(grid_size, map_type)
-                .extend(UnitSelectionLayer::Z_INDEX);
-            let tile_translation = map_transform.translation + tile_center;
-            camera_transform.translation = tile_translation.with_z(camera_transform.translation.z);
-            break;
-        }
+
+    let active_unit_selection =
+        unit_selection_tile_query
+            .iter()
+            .find(|(_tile_pos, &tile_texture)| {
+                matches!(tile_texture, TileTextureIndex(t) if t == UnitSelection::Active.into())
+            });
+    if let Some((tile_pos, _tile_texture)) = active_unit_selection {
+        let tile_center = tile_pos
+            .center_in_world(grid_size, map_type)
+            .extend(UnitSelectionLayer::Z_INDEX);
+        let tile_translation = map_transform.translation + tile_center;
+        camera_transform.translation = tile_translation.with_z(camera_transform.translation.z);
     }
 }
 
-#[allow(clippy::type_complexity)]
 fn mark_active_unit_out_of_orders(
-    unit_selection_tile_query: Query<(&TilePos, &TileTextureIndex), UnitSelectionLayerFilter>,
-    mut unit_state_tile_query: Query<(&TilePos, &mut TileTextureIndex), UnitStateLayerFilter>,
+    unit_state_tilemap_query: Query<(&TileStorage,), UnitStateLayerFilter>,
+    unit_selection_tile_query: Query<
+        (&TilePos, &TileTextureIndex, &UnitId),
+        UnitSelectionLayerFilter,
+    >,
+    mut unit_state_tile_query: Query<(&mut TileTextureIndex,), UnitStateLayerFilter>,
+    mut unit_query: Query<(&mut UnitState,), UnitFilter>,
 ) {
-    let Some(active_unit_tile_pos) =
+    let (unit_state_tile_storage,) = unit_state_tilemap_query.get_single().unwrap();
+
+    let active_unit_selection =
         unit_selection_tile_query
             .iter()
-            .find_map(|(tile_pos, tile_texture)| {
-                if tile_texture.0 == UnitSelection::Active.into() {
-                    Some(*tile_pos)
-                } else {
-                    None
-                }
-            })
+            .find(|(_tile_pos, &tile_texture, _unit_id)| {
+                matches!(tile_texture, TileTextureIndex(t) if t == UnitSelection::Active.into())
+            });
+    let Some((active_unit_tile_pos, _tile_texture, &UnitId(active_unit_entity))) =
+        active_unit_selection
     else {
         // No active unit selection.
         return;
     };
 
-    for (tile_pos, mut tile_texture) in unit_state_tile_query.iter_mut() {
-        if *tile_pos == active_unit_tile_pos {
-            match *tile_texture {
-                TileTextureIndex(t) if t == UnitState::CivilianReady.into() => {
-                    tile_texture.0 =
-                        (UnitState::CivilianReady + UnitStateModifier::OutOfOrders).into();
-                },
-                TileTextureIndex(t) if t == UnitState::LandMilitaryReady.into() => {
-                    tile_texture.0 =
-                        (UnitState::LandMilitaryReady + UnitStateModifier::OutOfOrders).into();
-                },
-                TileTextureIndex(t) if t == UnitState::LandMilitaryFortified.into() => {
-                    tile_texture.0 =
-                        (UnitState::LandMilitaryReady + UnitStateModifier::OutOfOrders).into();
-                },
-                TileTextureIndex(t)
-                    if t == (UnitState::LandMilitaryFortified + UnitStateModifier::OutOfOrders)
-                        .into() =>
-                {
-                    tile_texture.0 =
-                        (UnitState::LandMilitaryReady + UnitStateModifier::OutOfOrders).into();
-                },
-                _ => {},
-            }
-        }
-    }
+    let (mut unit_state,) = unit_query.get_mut(active_unit_entity).unwrap();
+    let next_unit_state = match *unit_state {
+        UnitState::CivilianReady => UnitState::CivilianReady + UnitStateModifier::OutOfOrders,
+        UnitState::LandMilitaryReady => {
+            UnitState::LandMilitaryReady + UnitStateModifier::OutOfOrders
+        },
+        UnitState::LandMilitaryFortified => {
+            UnitState::LandMilitaryReady + UnitStateModifier::OutOfOrders
+        },
+        s if s == UnitState::LandMilitaryFortified + UnitStateModifier::OutOfOrders => {
+            UnitState::LandMilitaryReady + UnitStateModifier::OutOfOrders
+        },
+        _ => {
+            // Unit state is unchanged.
+            return;
+        },
+    };
+    *unit_state = next_unit_state;
+
+    let (mut tile_texture,) = unit_state_tile_storage
+        .get(active_unit_tile_pos)
+        .map(|tile_entity| unit_state_tile_query.get_mut(tile_entity).unwrap())
+        .expect("active unit tile position should have unit state tile");
+    *tile_texture = TileTextureIndex(next_unit_state.into());
 }
 
-#[allow(clippy::type_complexity)]
 fn mark_active_unit_fortified(
-    unit_selection_tile_query: Query<(&TilePos, &TileTextureIndex), UnitSelectionLayerFilter>,
-    mut unit_state_tile_query: Query<(&TilePos, &mut TileTextureIndex), UnitStateLayerFilter>,
-    land_military_unit_tile_query: Query<&TilePos, LandMilitaryUnitLayerFilter>,
+    unit_state_tilemap_query: Query<(&TileStorage,), UnitStateLayerFilter>,
+    land_military_unit_tilemap_query: Query<(&TileStorage,), LandMilitaryUnitLayerFilter>,
+    unit_selection_tile_query: Query<
+        (&TilePos, &TileTextureIndex, &UnitId),
+        UnitSelectionLayerFilter,
+    >,
+    mut unit_state_tile_query: Query<(&mut TileTextureIndex,), UnitStateLayerFilter>,
+    mut unit_query: Query<(&mut UnitState,), UnitFilter>,
 ) {
-    let Some(active_unit_tile_pos) =
+    let (unit_state_tile_storage,) = unit_state_tilemap_query.get_single().unwrap();
+    let (land_military_unit_tile_storage,) = land_military_unit_tilemap_query.get_single().unwrap();
+
+    let active_unit_selection =
         unit_selection_tile_query
             .iter()
-            .find_map(|(tile_pos, tile_texture)| {
-                if tile_texture.0 == UnitSelection::Active.into() {
-                    Some(*tile_pos)
-                } else {
-                    None
-                }
-            })
+            .find(|(_tile_pos, &tile_texture, _unit_id)| {
+                matches!(tile_texture, TileTextureIndex(t) if t == UnitSelection::Active.into())
+            });
+    let Some((active_unit_tile_pos, _tile_texture, &UnitId(active_unit_entity))) =
+        active_unit_selection
     else {
         // No active unit selection.
         return;
     };
 
-    if !land_military_unit_tile_query
-        .iter()
-        .any(|&tile_pos| tile_pos == active_unit_tile_pos)
+    if land_military_unit_tile_storage
+        .get(active_unit_tile_pos)
+        .is_none()
     {
         // Active unit is not a land military unit.
         return;
     }
 
-    for (tile_pos, mut tile_texture) in unit_state_tile_query.iter_mut() {
-        if *tile_pos == active_unit_tile_pos {
-            tile_texture.0 =
-                (UnitState::LandMilitaryFortified + UnitStateModifier::OutOfOrders).into();
-        }
-    }
+    let (mut unit_state,) = unit_query.get_mut(active_unit_entity).unwrap();
+    let next_unit_state = UnitState::LandMilitaryFortified + UnitStateModifier::OutOfOrders;
+    unit_state.set_if_neq(next_unit_state);
+
+    let (mut tile_texture,) = unit_state_tile_storage
+        .get(active_unit_tile_pos)
+        .map(|tile_entity| unit_state_tile_query.get_mut(tile_entity).unwrap())
+        .expect("active unit tile position should have unit state tile");
+    tile_texture.set_if_neq(TileTextureIndex(next_unit_state.into()));
 }
 
 /// Keeps the cursor position updated based on any [`CursorMoved`] events.
@@ -1416,60 +1483,80 @@ fn update_cursor_tile_pos(
     }
 }
 
-#[allow(clippy::type_complexity)]
 fn select_unit(
-    mut commands: Commands,
     cursor_tile_pos: Option<Res<CursorTilePos>>,
-    mut unit_selection_tilemap_query: Query<(Entity, &mut TileStorage), UnitSelectionLayerFilter>,
-    unit_state_tilemap_query: Query<&TileStorage, UnitStateLayerFilter>,
-    mut unit_selection_tile_query: Query<
-        (Entity, &mut TilePos, &TileTextureIndex),
+    unit_state_tilemap_query: Query<(&TileStorage,), UnitStateLayerFilter>,
+    unit_selection_tile_query: Query<
+        (&TilePos, &TileTextureIndex, &UnitId),
         UnitSelectionLayerFilter,
     >,
+    unit_state_tile_query: Query<(&UnitId,), UnitStateLayerFilter>,
+    unit_query: Query<(Entity, &TilePos), UnitFilter>,
+    mut unit_selected_events: EventWriter<UnitSelected>,
 ) {
     let Some(cursor_tile_pos) = cursor_tile_pos else {
         // No tile position from cursor.
         return;
     };
-    let (unit_selection_tilemap_entity, mut unit_selection_tile_storage) =
-        unit_selection_tilemap_query.get_single_mut().unwrap();
-    let unit_state_tile_storage = unit_state_tilemap_query.get_single().unwrap();
+
+    let (unit_state_tile_storage,) = unit_state_tilemap_query.get_single().unwrap();
+
     // TODO: Restrict to the units controlled by the current player.
-    let Some(_tile_entity) = unit_state_tile_storage.get(&cursor_tile_pos.0) else {
+    let units: Vec<_> = unit_query
+        .iter()
+        .filter(|(_unit_entity, &tile_pos)| tile_pos == cursor_tile_pos.0)
+        .collect();
+    if units.is_empty() {
         // No unit present at this tile position.
         return;
-    };
+    }
+
     let active_unit_selection =
         unit_selection_tile_query
-            .iter_mut()
-            .find_map(|(tile_entity, tile_pos, &tile_texture)| {
-                if tile_texture.0 == UnitSelection::Active.into() {
-                    Some((tile_entity, tile_pos))
-                } else {
-                    None
-                }
+            .iter()
+            .find(|(_tile_pos, &tile_texture, _unit_id)| {
+                matches!(tile_texture, TileTextureIndex(t) if t == UnitSelection::Active.into())
             });
 
-    if let Some((tile_entity, mut active_unit_tile_pos)) = active_unit_selection {
-        // Move the unit selection tile to under the cursor.
+    if let Some((active_unit_tile_pos, _tile_texture, UnitId(active_unit_entity))) =
+        active_unit_selection
+            .filter(|(&tile_pos, _tile_texture, _unit_id)| tile_pos == cursor_tile_pos.0)
+    {
+        // Select the next unit at the same tile position as the active unit.
+        // This allows cycling through stacked units.
 
-        unit_selection_tile_storage.remove(&active_unit_tile_pos);
-        *active_unit_tile_pos = cursor_tile_pos.0;
-        unit_selection_tile_storage.set(&cursor_tile_pos.0, tile_entity);
-    } else {
-        // Spawn a new unit selection tile, since there was no currently active unit.
+        let next_units = units
+            .iter()
+            .skip_while(|(unit_entity, _tile_pos)| unit_entity != active_unit_entity)
+            .skip(1);
+        let previous_units = units
+            .iter()
+            .take_while(|(unit_entity, _tile_pos)| unit_entity != active_unit_entity);
 
-        let tile_pos = cursor_tile_pos.0;
-        let tile_entity = commands
-            .spawn(TileBundle {
+        if let Some(&(unit_entity, &tile_pos)) = next_units.chain(previous_units).next() {
+            unit_selected_events.send(UnitSelected {
+                entity: unit_entity,
                 position: tile_pos,
-                tilemap_id: TilemapId(unit_selection_tilemap_entity),
-                texture_index: TileTextureIndex(UnitSelection::Active.into()),
-                ..Default::default()
-            })
-            .insert(UnitSelectionLayer)
-            .id();
-        unit_selection_tile_storage.set(&tile_pos, tile_entity);
+            });
+        } else {
+            // Re-select the active unit.
+            unit_selected_events.send(UnitSelected {
+                entity: *active_unit_entity,
+                position: *active_unit_tile_pos,
+            });
+        }
+    } else {
+        // Select the unit whose unit state is shown at this tile position.
+
+        let tile_entity = unit_state_tile_storage
+            .get(&cursor_tile_pos.0)
+            .expect("tile position with units should have unit state tile");
+        let (&UnitId(unit_entity),) = unit_state_tile_query.get(tile_entity).unwrap();
+
+        unit_selected_events.send(UnitSelected {
+            entity: unit_entity,
+            position: cursor_tile_pos.0,
+        });
     }
 }
 
@@ -1481,17 +1568,13 @@ fn should_move_active_unit_to(
         // No tile position from cursor.
         return false;
     };
-    let Some(active_unit_tile_pos) =
+    let active_unit_selection =
         unit_selection_tile_query
             .iter()
-            .find_map(|(tile_pos, &tile_texture)| {
-                if tile_texture.0 == UnitSelection::Active.into() {
-                    Some(*tile_pos)
-                } else {
-                    None
-                }
-            })
-    else {
+            .find(|(_tile_pos, &tile_texture)| {
+                matches!(tile_texture, TileTextureIndex(t) if t == UnitSelection::Active.into())
+            });
+    let Some((&active_unit_tile_pos, _tile_texture)) = active_unit_selection else {
         // Nothing to move as there is no active unit selection.
         return false;
     };
@@ -1505,27 +1588,24 @@ fn should_move_active_unit_to(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::type_complexity)]
 fn move_active_unit_to(
-    mut _commands: Commands,
     cursor_tile_pos: Res<CursorTilePos>,
     base_terrain_tilemap_query: Query<(&TilemapSize, &TileStorage), BaseTerrainLayerFilter>,
     river_tilemap_query: Query<&TileStorage, RiverLayerFilter>,
     terrain_features_tilemap_query: Query<&TileStorage, TerrainFeaturesLayerFilter>,
-    civilian_unit_tilemap_query: Query<&TileStorage, CivilianUnitLayerFilter>,
-    land_military_unit_tilemap_query: Query<&TileStorage, LandMilitaryUnitLayerFilter>,
+    unit_state_tilemap_query: Query<&TileStorage, UnitStateLayerFilter>,
     base_terrain_tile_query: Query<&TileTextureIndex, BaseTerrainLayerFilter>,
     river_tile_query: Query<&TileTextureIndex, RiverLayerFilter>,
     terrain_features_tile_query: Query<&TileTextureIndex, TerrainFeaturesLayerFilter>,
     unit_selection_tile_query: Query<(&TilePos, &TileTextureIndex), UnitSelectionLayerFilter>,
-    unit_tile_query: Query<(&MovementPoints, &FullMovementPoints), UnitLayersFilter>,
+    unit_state_tile_query: Query<(&UnitId,), UnitStateLayerFilter>,
+    unit_query: Query<(&MovementPoints, &FullMovementPoints), UnitFilter>,
     mut unit_moved_events: EventWriter<UnitMoved>,
 ) {
     let (map_size, base_terrain_tile_storage) = base_terrain_tilemap_query.get_single().unwrap();
     let river_tile_storage = river_tilemap_query.get_single().unwrap();
     let terrain_features_tile_storage = terrain_features_tilemap_query.get_single().unwrap();
-    let civilian_unit_tile_storage = civilian_unit_tilemap_query.get_single().unwrap();
-    let land_military_unit_tile_storage = land_military_unit_tilemap_query.get_single().unwrap();
+    let unit_state_tile_storage = unit_state_tilemap_query.get_single().unwrap();
 
     let active_unit_selection_pos = unit_selection_tile_query
         .iter()
@@ -1539,11 +1619,11 @@ fn move_active_unit_to(
         .expect("there should be an active unit selection");
     let start = active_unit_selection_pos;
     let goal = cursor_tile_pos.0;
-    let unit_tile_entity = [civilian_unit_tile_storage, land_military_unit_tile_storage]
-        .into_iter()
-        .find_map(|tile_storage| tile_storage.get(&start))
-        .expect("active unit tile position should have a valid unit");
-    let (movement_points, full_movement_points) = unit_tile_query.get(unit_tile_entity).unwrap();
+    let (&UnitId(unit_entity),) = unit_state_tile_storage
+        .get(&start)
+        .map(|tile_entity| unit_state_tile_query.get(tile_entity).unwrap())
+        .expect("active unit tile position should have unit state tile");
+    let (movement_points, full_movement_points) = unit_query.get(unit_entity).unwrap();
 
     let successors = |(x, y)| {
         let tile_pos = TilePos { x, y };
@@ -1627,7 +1707,7 @@ fn move_active_unit_to(
 
     let mut current = start;
     let mut movement_points = *movement_points;
-    loop {
+    while current != goal {
         // TODO: Limit pathfinding to partial knowledge:
         // 1. Only tiles already explored by the current player would have a known
         //    movement cost.
@@ -1641,7 +1721,7 @@ fn move_active_unit_to(
 
         let shortest_path = astar(
             &(current.x, current.y),
-            |p| successors(*p),
+            |&p| successors(p),
             |&(x, y)| NotNan::from(CubePos::from(TilePos { x, y }).distance_from(&goal.into())),
             |&(x, y)| TilePos { x, y } == goal,
         );
@@ -1665,15 +1745,11 @@ fn move_active_unit_to(
                 TilePos { x, y }
             };
             unit_moved_events.send(UnitMoved {
-                entity: unit_tile_entity,
+                entity: unit_entity,
                 from_pos: current,
                 to_pos: next,
                 movement_cost,
             });
-            if next == goal {
-                // Goal reached.
-                break;
-            }
             current = next;
         } else {
             info!(?current, ?start, ?goal, "could not find path");
@@ -1684,109 +1760,390 @@ fn move_active_unit_to(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::type_complexity)]
-fn sync_unit_moved(
-    mut unit_selection_tilemap_query: Query<&mut TileStorage, UnitSelectionLayerFilter>,
-    mut unit_state_tilemap_query: Query<&mut TileStorage, UnitStateLayerFilter>,
-    mut civilian_unit_tilemap_query: Query<&mut TileStorage, CivilianUnitLayerFilter>,
-    mut land_military_unit_tilemap_query: Query<&mut TileStorage, LandMilitaryUnitLayerFilter>,
+fn sync_unit_selected(
+    mut commands: Commands,
+    mut unit_selection_tilemap_query: Query<(Entity, &mut TileStorage), UnitSelectionLayerFilter>,
+    unit_state_tilemap_query: Query<(&TileStorage,), UnitStateLayerFilter>,
+    mut civilian_unit_tilemap_query: Query<(Entity, &mut TileStorage), CivilianUnitLayerFilter>,
+    mut land_military_unit_tilemap_query: Query<
+        (Entity, &mut TileStorage),
+        LandMilitaryUnitLayerFilter,
+    >,
     mut unit_selection_tile_query: Query<
-        (Entity, &mut TilePos, &TileTextureIndex),
+        (Entity, &mut TilePos, &TileTextureIndex, &mut UnitId),
         UnitSelectionLayerFilter,
     >,
-    mut unit_state_tile_query: Query<
-        (Entity, &mut TilePos, &mut TileTextureIndex, &Unit),
-        UnitStateLayerFilter,
-    >,
-    mut unit_tile_query: Query<(&mut TilePos, &mut MovementPoints), UnitLayersFilter>,
-    mut unit_moved_events: EventReader<UnitMoved>,
+    mut unit_state_tile_query: Query<(&mut TileTextureIndex, &mut UnitId), UnitStateLayerFilter>,
+    mut unit_tile_query: Query<(&mut TileTextureIndex, &mut UnitId), UnitLayersFilter>,
+    unit_query: Query<(&UnitType, &Civ, &UnitState), UnitFilter>,
+    mut unit_selected_events: EventReader<UnitSelected>,
 ) {
-    let mut unit_selection_tile_storage = unit_selection_tilemap_query.get_single_mut().unwrap();
-    let mut unit_state_tile_storage = unit_state_tilemap_query.get_single_mut().unwrap();
-    let mut civilian_unit_tile_storage = civilian_unit_tilemap_query.get_single_mut().unwrap();
-    let mut land_military_unit_tile_storage =
+    let (unit_selection_tilemap_entity, mut unit_selection_tile_storage) =
+        unit_selection_tilemap_query.get_single_mut().unwrap();
+    let (unit_state_tile_storage,) = unit_state_tilemap_query.get_single().unwrap();
+    let (civilian_unit_tilemap_entity, mut civilian_unit_tile_storage) =
+        civilian_unit_tilemap_query.get_single_mut().unwrap();
+    let (land_military_unit_tilemap_entity, mut land_military_unit_tile_storage) =
         land_military_unit_tilemap_query.get_single_mut().unwrap();
 
-    for UnitMoved {
-        entity: moved_unit_entity,
-        from_pos,
-        to_pos,
-        movement_cost,
-    } in unit_moved_events.read()
-    {
-        let movement_points = {
-            let (tile_storage, tile_entity) = [
-                civilian_unit_tile_storage.as_mut(),
-                land_military_unit_tile_storage.as_mut(),
-            ]
-            .into_iter()
-            .find_map(|tile_storage| {
-                tile_storage
-                    .get(from_pos)
-                    .filter(|tile_entity| tile_entity == moved_unit_entity)
-                    .map(|tile_entity| (tile_storage, tile_entity))
-            })
-            .expect("the unit being moved should be a valid unit at `from_pos`");
-            let (mut tile_pos, mut movement_points) = unit_tile_query.get_mut(tile_entity).unwrap();
+    let mut new_unit_selection_tile_bundle = None;
+    let mut new_unit_tile_bundles = HashMap::new();
+    for unit_selected in unit_selected_events.read() {
+        debug!(?unit_selected, "unit selected");
+        let UnitSelected {
+            entity: selected_unit_entity,
+            position: selected_unit_tile_pos,
+        } = unit_selected;
 
-            tile_storage.remove(from_pos);
+        let (&unit_type, &civ, &unit_state) = unit_query.get(*selected_unit_entity).unwrap();
+
+        let active_unit_selection = unit_selection_tile_query.iter_mut().find(
+            |(_tile_entity, _tile_pos, &tile_texture, _unit_id)| {
+                matches!(tile_texture, TileTextureIndex(t) if t == UnitSelection::Active.into())
+            },
+        );
+        new_unit_selection_tile_bundle = None;
+        if let Some((tile_entity, mut tile_pos, _tile_texture, mut unit_id)) = active_unit_selection
+        {
+            // Update unit selection tile.
+
+            unit_selection_tile_storage.remove(&tile_pos);
+            tile_pos.set_if_neq(*selected_unit_tile_pos);
+            unit_selection_tile_storage.set(selected_unit_tile_pos, tile_entity);
+            unit_id.set_if_neq(UnitId(*selected_unit_entity));
+        } else {
+            // We need to spawn a new unit selection tile, since there was no currently
+            // active unit.
+
+            new_unit_selection_tile_bundle = Some(UnitSelectionTileBundle::new(
+                *selected_unit_tile_pos,
+                TilemapId(unit_selection_tilemap_entity),
+                UnitId(*selected_unit_entity),
+            ));
+        }
+
+        // Update unit state tile.
+        // This should always exist so long as there is a unit at this tile position,
+        // even in cases of unit stacking.
+        {
+            let (mut tile_texture, mut unit_id) = unit_state_tile_storage
+                .get(selected_unit_tile_pos)
+                .map(|tile_entity| unit_state_tile_query.get_mut(tile_entity).unwrap())
+                .expect("selected unit tile position should have unit state tile");
+            tile_texture.set_if_neq(TileTextureIndex(unit_state.into()));
+            unit_id.set_if_neq(UnitId(*selected_unit_entity));
+        }
+
+        // Update unit tile.
+        let mut unit_tile_storages = HashMap::from([
+            (
+                TypeId::of::<CivilianUnit>(),
+                civilian_unit_tile_storage.reborrow(),
+            ),
+            (
+                TypeId::of::<LandMilitaryUnit>(),
+                land_military_unit_tile_storage.reborrow(),
+            ),
+        ]);
+        new_unit_tile_bundles.remove(selected_unit_tile_pos);
+        match unit_type {
+            UnitType::Civilian(civilian_unit) => {
+                let tile_storage = unit_tile_storages
+                    .remove(&TypeId::of::<CivilianUnit>())
+                    .unwrap();
+                update_civilian_unit_tile(
+                    selected_unit_tile_pos,
+                    civilian_unit,
+                    civ.0,
+                    TilemapId(civilian_unit_tilemap_entity),
+                    UnitId(*selected_unit_entity),
+                    &tile_storage,
+                    &mut unit_tile_query,
+                    &mut new_unit_tile_bundles,
+                );
+            },
+            UnitType::LandMilitary(land_military_unit) => {
+                let tile_storage = unit_tile_storages
+                    .remove(&TypeId::of::<LandMilitaryUnit>())
+                    .unwrap();
+                update_land_military_unit_tile(
+                    selected_unit_tile_pos,
+                    land_military_unit,
+                    civ.0,
+                    TilemapId(land_military_unit_tilemap_entity),
+                    UnitId(*selected_unit_entity),
+                    &tile_storage,
+                    &mut unit_tile_query,
+                    &mut new_unit_tile_bundles,
+                );
+            },
+        }
+        // Remove other unit tiles at the same tile position.
+        for mut tile_storage in unit_tile_storages.into_values() {
+            if let Some(tile_entity) = tile_storage.get(selected_unit_tile_pos) {
+                commands.entity(tile_entity).despawn();
+                tile_storage.remove(selected_unit_tile_pos);
+            }
+        }
+    }
+
+    // Do the deferred spawning.
+    if let Some(unit_selection_tile_bundle) = new_unit_selection_tile_bundle {
+        let tile_pos = unit_selection_tile_bundle.tile_bundle.position;
+        let tile_entity = commands.spawn(unit_selection_tile_bundle).id();
+        unit_selection_tile_storage.set(&tile_pos, tile_entity);
+    }
+    for (tile_pos, unit_tile_bundle) in new_unit_tile_bundles {
+        match unit_tile_bundle {
+            UnitTileBundle::Civilian(civilian_unit_tile_bundle) => {
+                let tile_entity = commands.spawn(civilian_unit_tile_bundle).id();
+                civilian_unit_tile_storage.set(&tile_pos, tile_entity);
+            },
+            UnitTileBundle::LandMilitary(land_military_unit_tile_bundle) => {
+                let tile_entity = commands.spawn(land_military_unit_tile_bundle).id();
+                land_military_unit_tile_storage.set(&tile_pos, tile_entity);
+            },
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn sync_unit_moved(
+    mut commands: Commands,
+    mut unit_selection_tilemap_query: Query<(&mut TileStorage,), UnitSelectionLayerFilter>,
+    mut unit_state_tilemap_query: Query<(Entity, &mut TileStorage), UnitStateLayerFilter>,
+    mut civilian_unit_tilemap_query: Query<(Entity, &mut TileStorage), CivilianUnitLayerFilter>,
+    mut land_military_unit_tilemap_query: Query<
+        (Entity, &mut TileStorage),
+        LandMilitaryUnitLayerFilter,
+    >,
+    mut unit_selection_tile_query: Query<
+        (Entity, &mut TilePos, &TileTextureIndex, &UnitId),
+        UnitSelectionLayerFilter,
+    >,
+    mut unit_state_tile_query: Query<(&mut TileTextureIndex, &mut UnitId), UnitStateLayerFilter>,
+    mut unit_tile_query: Query<(&mut TileTextureIndex, &mut UnitId), UnitLayersFilter>,
+    mut unit_query: Query<
+        (
+            Entity,
+            &mut TilePos,
+            &UnitType,
+            &Civ,
+            &mut MovementPoints,
+            &mut UnitState,
+        ),
+        UnitFilter,
+    >,
+    mut unit_moved_events: EventReader<UnitMoved>,
+) {
+    let (mut unit_selection_tile_storage,) = unit_selection_tilemap_query.get_single_mut().unwrap();
+    let (unit_state_tilemap_entity, mut unit_state_tile_storage) =
+        unit_state_tilemap_query.get_single_mut().unwrap();
+    let (civilian_unit_tilemap_entity, mut civilian_unit_tile_storage) =
+        civilian_unit_tilemap_query.get_single_mut().unwrap();
+    let (land_military_unit_tilemap_entity, mut land_military_unit_tile_storage) =
+        land_military_unit_tilemap_query.get_single_mut().unwrap();
+
+    let mut new_unit_tile_bundles = HashMap::new();
+    let mut new_unit_state_tile_bundles = HashMap::new();
+    for unit_moved in unit_moved_events.read() {
+        debug!(?unit_moved, "unit moved");
+        let UnitMoved {
+            entity: moved_unit_entity,
+            from_pos,
+            to_pos,
+            movement_cost,
+        } = unit_moved;
+
+        // Update unit.
+        {
+            let (_unit_entity, mut tile_pos, _unit_type, _civ, mut movement_points, mut unit_state) =
+                unit_query.get_mut(*moved_unit_entity).unwrap();
+            assert!(&*tile_pos == from_pos);
             *tile_pos = *to_pos;
-            tile_storage.set(to_pos, tile_entity);
-
             movement_points.0 -= *movement_cost;
-            *movement_points
-        };
-
-        // TODO: Handle the case of multiple units in the same tile position.
-        let _unit = if let Some((tile_entity, mut tile_pos, mut tile_texture, &unit)) =
-            unit_state_tile_query.iter_mut().find(
-                |(_tile_entity, tile_pos, _tile_texture, Unit(unit_tile_entity))| {
-                    &**tile_pos == from_pos && unit_tile_entity == moved_unit_entity
-                },
-            ) {
-            unit_state_tile_storage.remove(from_pos);
-            *tile_pos = *to_pos;
-            unit_state_tile_storage.set(to_pos, tile_entity);
             if movement_points.0 == 0.0 {
-                let unit_state = UnitState::try_from(tile_texture.0).unwrap();
-                match unit_state {
+                let next_unit_state = match *unit_state {
                     UnitState::CivilianReady | UnitState::CivilianReadyOutOfOrders => {
-                        tile_texture.0 = UnitState::CivilianOutOfMoves.into();
+                        UnitState::CivilianOutOfMoves
                     },
                     UnitState::LandMilitaryReady
                     | UnitState::LandMilitaryReadyOutOfOrders
                     | UnitState::LandMilitaryFortified
                     | UnitState::LandMilitaryFortifiedOutOfOrders => {
-                        tile_texture.0 = UnitState::LandMilitaryOutOfMoves.into();
+                        UnitState::LandMilitaryOutOfMoves
                     },
                     UnitState::CivilianOutOfMoves | UnitState::LandMilitaryOutOfMoves => {
                         unreachable!("the unit being moved should not be out of moves");
                     },
+                };
+                *unit_state = next_unit_state;
+            }
+        }
+
+        for (tile_pos, unit_entity) in [(from_pos, None), (to_pos, Some(moved_unit_entity))] {
+            new_unit_tile_bundles.remove(tile_pos);
+            new_unit_state_tile_bundles.remove(tile_pos);
+
+            let mut unit_tile_storages = HashMap::from([
+                (
+                    TypeId::of::<CivilianUnit>(),
+                    civilian_unit_tile_storage.reborrow(),
+                ),
+                (
+                    TypeId::of::<LandMilitaryUnit>(),
+                    land_military_unit_tile_storage.reborrow(),
+                ),
+            ]);
+            let Some((unit_entity, _tile_pos, &unit_type, civ, _movement_points, unit_state)) =
+                unit_entity
+                    .map(|&unit_entity| unit_query.get(unit_entity).unwrap())
+                    .or_else(|| {
+                        unit_query.iter().find(
+                            |(
+                                _unit_entity,
+                                &unit_tile_pos,
+                                _unit_type,
+                                _civ,
+                                _movement_points,
+                                _unit_state,
+                            )| { unit_tile_pos == *tile_pos },
+                        )
+                    })
+            else {
+                // Remove unit tiles and unit state tile, as there are no units at this tile
+                // position.
+                for mut tile_storage in unit_tile_storages.into_values() {
+                    if let Some(tile_entity) = tile_storage.get(tile_pos) {
+                        commands.entity(tile_entity).despawn();
+                        tile_storage.remove(tile_pos);
+                    }
+                }
+                if let Some(tile_entity) = unit_state_tile_storage.get(tile_pos) {
+                    commands.entity(tile_entity).despawn();
+                    unit_state_tile_storage.remove(tile_pos);
+                }
+                continue;
+            };
+
+            match unit_type {
+                UnitType::Civilian(civilian_unit) => {
+                    // Update unit tile.
+                    let tile_storage = unit_tile_storages
+                        .remove(&TypeId::of::<CivilianUnit>())
+                        .unwrap();
+                    update_civilian_unit_tile(
+                        tile_pos,
+                        civilian_unit,
+                        civ.0,
+                        TilemapId(civilian_unit_tilemap_entity),
+                        UnitId(unit_entity),
+                        &tile_storage,
+                        &mut unit_tile_query,
+                        &mut new_unit_tile_bundles,
+                    );
+
+                    // Update unit state tile.
+                    if let Some(tile_entity) = unit_state_tile_storage.get(tile_pos) {
+                        let (mut tile_texture, mut unit_id) =
+                            unit_state_tile_query.get_mut(tile_entity).unwrap();
+                        tile_texture.set_if_neq(TileTextureIndex((*unit_state).into()));
+                        *unit_id = UnitId(unit_entity);
+                    } else {
+                        let mut unit_state_tile_bundle = UnitStateTileBundle::new(
+                            *tile_pos,
+                            UnitType::Civilian(civilian_unit),
+                            civ.0,
+                            TilemapId(unit_state_tilemap_entity),
+                            UnitId(unit_entity),
+                        );
+                        unit_state_tile_bundle.tile_bundle.texture_index =
+                            TileTextureIndex((*unit_state).into());
+                        new_unit_state_tile_bundles.insert(*tile_pos, unit_state_tile_bundle);
+                    }
+                },
+                UnitType::LandMilitary(land_military_unit) => {
+                    // Update unit tile.
+                    let tile_storage = unit_tile_storages
+                        .remove(&TypeId::of::<LandMilitaryUnit>())
+                        .unwrap();
+                    update_land_military_unit_tile(
+                        tile_pos,
+                        land_military_unit,
+                        civ.0,
+                        TilemapId(land_military_unit_tilemap_entity),
+                        UnitId(unit_entity),
+                        &tile_storage,
+                        &mut unit_tile_query,
+                        &mut new_unit_tile_bundles,
+                    );
+
+                    // Update unit state tile.
+                    if let Some(tile_entity) = unit_state_tile_storage.get(tile_pos) {
+                        let (mut tile_texture, mut unit_id) =
+                            unit_state_tile_query.get_mut(tile_entity).unwrap();
+                        tile_texture.set_if_neq(TileTextureIndex((*unit_state).into()));
+                        *unit_id = UnitId(unit_entity);
+                    } else {
+                        let mut unit_state_tile_bundle = UnitStateTileBundle::new(
+                            *tile_pos,
+                            UnitType::LandMilitary(land_military_unit),
+                            civ.0,
+                            TilemapId(unit_state_tilemap_entity),
+                            UnitId(unit_entity),
+                        );
+                        unit_state_tile_bundle.tile_bundle.texture_index =
+                            TileTextureIndex((*unit_state).into());
+                        new_unit_state_tile_bundles.insert(*tile_pos, unit_state_tile_bundle);
+                    }
+                },
+            }
+            // Remove other unit tiles at the same tile position.
+            for mut tile_storage in unit_tile_storages.into_values() {
+                if let Some(tile_entity) = tile_storage.get(tile_pos) {
+                    commands.entity(tile_entity).despawn();
+                    tile_storage.remove(tile_pos);
                 }
             }
-            unit
-        } else {
-            // If the moved unit does not match any unit state, then it should not match any
-            // unit selection either.
-            continue;
-        };
+        }
 
-        let active_unit_selection = unit_selection_tile_query.iter_mut().find_map(
-            |(tile_entity, tile_pos, &tile_texture)| {
-                if tile_texture.0 == UnitSelection::Active.into() {
-                    Some((tile_entity, tile_pos))
-                } else {
-                    None
-                }
-            },
-        );
-        if let Some((tile_entity, mut tile_pos)) =
-            active_unit_selection.filter(|(_tile_entity, tile_pos)| &**tile_pos == from_pos)
+        // Update unit selection tile.
+        let active_unit_selection =
+        unit_selection_tile_query
+            .iter_mut()
+            .find(|(_tile_entity, _tile_pos, &tile_texture, _unit_id)| {
+                matches!(tile_texture, TileTextureIndex(t) if t == UnitSelection::Active.into())
+            });
+        if let Some((tile_entity, mut tile_pos, _tile_texture, _unit_id)) = active_unit_selection
+            .filter(
+                |(_tile_entity, _tile_pos, _tile_texture, UnitId(unit_entity))| {
+                    unit_entity == moved_unit_entity
+                },
+            )
         {
+            assert!(&*tile_pos == from_pos);
             unit_selection_tile_storage.remove(from_pos);
             *tile_pos = *to_pos;
             unit_selection_tile_storage.set(to_pos, tile_entity);
         }
+    }
+
+    // Do the deferred spawning.
+    for (tile_pos, unit_tile_bundle) in new_unit_tile_bundles {
+        match unit_tile_bundle {
+            UnitTileBundle::Civilian(civilian_unit_tile_bundle) => {
+                let tile_entity = commands.spawn(civilian_unit_tile_bundle).id();
+                civilian_unit_tile_storage.set(&tile_pos, tile_entity);
+            },
+            UnitTileBundle::LandMilitary(land_military_unit_tile_bundle) => {
+                let tile_entity = commands.spawn(land_military_unit_tile_bundle).id();
+                land_military_unit_tile_storage.set(&tile_pos, tile_entity);
+            },
+        }
+    }
+    for (tile_pos, unit_state_tile_bundle) in new_unit_state_tile_bundles {
+        let tile_entity = commands.spawn(unit_state_tile_bundle).id();
+        unit_state_tile_storage.set(&tile_pos, tile_entity);
     }
 }
 
@@ -1919,5 +2276,63 @@ fn choose_base_terrain_by_latitude(rng: &mut fastrand::Rng, latitude: NotNan<f64
         rng.choice(SUBTROPICS_TILE_CHOICES).unwrap()
     } else {
         rng.choice(TROPICS_TILE_CHOICES).unwrap()
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn update_civilian_unit_tile(
+    tile_pos: &TilePos,
+    civilian_unit: CivilianUnit,
+    civ: Civilization,
+    civilian_unit_tilemap_id: TilemapId,
+    civilian_unit_id: UnitId,
+    civilian_unit_tile_storage: &TileStorage,
+    unit_tile_query: &mut Query<(&mut TileTextureIndex, &mut UnitId), UnitLayersFilter>,
+    new_unit_tile_bundles: &mut HashMap<TilePos, UnitTileBundle>,
+) {
+    if let Some(tile_entity) = civilian_unit_tile_storage.get(tile_pos) {
+        let (mut tile_texture, mut unit_id) = unit_tile_query.get_mut(tile_entity).unwrap();
+        tile_texture.set_if_neq(TileTextureIndex(civilian_unit.into()));
+        unit_id.set_if_neq(civilian_unit_id);
+    } else {
+        new_unit_tile_bundles.insert(
+            *tile_pos,
+            UnitTileBundle::Civilian(CivilianUnitTileBundle::new(
+                *tile_pos,
+                civilian_unit,
+                civ,
+                civilian_unit_tilemap_id,
+                civilian_unit_id,
+            )),
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn update_land_military_unit_tile(
+    tile_pos: &TilePos,
+    land_military_unit: LandMilitaryUnit,
+    civ: Civilization,
+    land_military_unit_tilemap_id: TilemapId,
+    land_military_unit_id: UnitId,
+    land_military_unit_tile_storage: &TileStorage,
+    unit_tile_query: &mut Query<(&mut TileTextureIndex, &mut UnitId), UnitLayersFilter>,
+    new_unit_tile_bundles: &mut HashMap<TilePos, UnitTileBundle>,
+) {
+    if let Some(tile_entity) = land_military_unit_tile_storage.get(tile_pos) {
+        let (mut tile_texture, mut unit_id) = unit_tile_query.get_mut(tile_entity).unwrap();
+        tile_texture.set_if_neq(TileTextureIndex(land_military_unit.into()));
+        unit_id.set_if_neq(land_military_unit_id);
+    } else {
+        new_unit_tile_bundles.insert(
+            *tile_pos,
+            UnitTileBundle::LandMilitary(LandMilitaryUnitTileBundle::new(
+                *tile_pos,
+                land_military_unit,
+                civ,
+                land_military_unit_tilemap_id,
+                land_military_unit_id,
+            )),
+        );
     }
 }
