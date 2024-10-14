@@ -1,7 +1,10 @@
 use bevy::color::Srgba;
+use bevy::ecs::component::Component;
+use bevy::ecs::system::Resource;
+use derive_more::Display;
 use strum::VariantArray;
 
-#[derive(Copy, Clone, Eq, PartialEq, VariantArray)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug, Display, Component, VariantArray)]
 pub enum Civilization {
     America,
     Arabia,
@@ -22,6 +25,9 @@ pub enum Civilization {
     Spain,
     Sumeria,
 }
+
+#[derive(Resource)]
+pub struct OurCivilization(pub Civilization);
 
 impl Civilization {
     pub fn colors(&self) -> [Srgba; 2] {

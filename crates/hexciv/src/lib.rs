@@ -1,7 +1,8 @@
-pub mod actions;
-pub mod helpers;
-pub mod layers;
-pub mod states;
-pub mod types;
-pub mod units;
-pub mod utils;
+pub mod action;
+pub mod civilization;
+pub mod event;
+pub mod game_setup;
+pub mod layer;
+pub mod player;
+pub mod state;
+pub mod unit;

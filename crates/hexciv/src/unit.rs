@@ -5,31 +5,33 @@ use bevy::ecs::event::Event;
 use bevy::ecs::query::{QueryFilter, With, Without};
 use bevy_ecs_tilemap::map::TilemapId;
 use bevy_ecs_tilemap::tiles::{TileBundle, TileColor, TilePos, TileTextureIndex};
+use derive_more::Display;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use ordered_float::NotNan;
 
-use crate::layers::{
+use crate::civilization::Civilization;
+use crate::layer::{
     BaseTerrainLayer, CivilianUnitLayer, LandMilitaryUnitLayer, RiverLayer, TerrainFeaturesLayer,
     UnitSelectionLayer, UnitStateLayer,
 };
-use crate::types::Civilization;
 
-#[derive(Copy, Clone, Component)]
-pub struct Civ(pub Civilization);
-
-#[derive(Copy, Clone, Eq, PartialEq, Component)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug, Display, Component)]
 pub enum UnitType {
     Civilian(CivilianUnit),
     LandMilitary(LandMilitaryUnit),
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Component, IntoPrimitive, TryFromPrimitive)]
+#[derive(
+    Copy, Clone, Eq, PartialEq, Debug, Display, Component, IntoPrimitive, TryFromPrimitive,
+)]
 #[repr(u32)]
 pub enum CivilianUnit {
     Settler = 0,
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Component, IntoPrimitive, TryFromPrimitive)]
+#[derive(
+    Copy, Clone, Eq, PartialEq, Debug, Display, Component, IntoPrimitive, TryFromPrimitive,
+)]
 #[repr(u32)]
 pub enum LandMilitaryUnit {
     Warrior = 0,
@@ -67,7 +69,7 @@ pub struct UnitId(pub Entity);
 pub struct UnitBundle {
     pub position: TilePos,
     pub unit_type: UnitType,
-    pub civ: Civ,
+    pub civ: Civilization,
     pub movement_points: MovementPoints,
     pub full_movement_points: FullMovementPoints,
     pub unit_state: UnitState,
@@ -170,7 +172,7 @@ impl UnitBundle {
         Self {
             position,
             unit_type,
-            civ: Civ(civ),
+            civ,
             movement_points,
             full_movement_points,
             unit_state,

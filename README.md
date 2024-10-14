@@ -6,15 +6,33 @@
 [Civ VI]: https://civilization.fandom.com/wiki/Civilization_VI
 [Rust]: https://www.rust-lang.org/
 
-## Run in browser
+## Setup
 
-**Prerequisite**: Install and setup [wasm-server-runner].
+### Setup matchbox_server
 
 ```
-cargo run --target wasm32-unknown-unknown
+cargo install matchbox_server
 ```
+
+### Setup wasm-server-runner
+
+Install and setup [wasm-server-runner].
 
 [wasm-server-runner]: https://github.com/jakobhellermann/wasm-server-runner
+
+## Run
+
+### Run matchbox_server
+
+```
+matchbox_server
+```
+
+### Serve the game
+
+```
+WASM_SERVER_RUNNER_ADDRESS=0.0.0.0 cargo run --target wasm32-unknown-unknown
+```
 
 ## License
 

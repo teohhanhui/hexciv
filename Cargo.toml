@@ -14,34 +14,33 @@ license = "MIT OR Apache-2.0"
 [workspace.dependencies]
 bevy = { version = "0.14.1", default-features = false }
 bevy_ecs_tilemap = { version = "0.14.0", default-features = false }
+bevy_matchbox = { version = "0.10.0", default-features = false }
 bevy_pancam = { version = "0.14.0", default-features = false }
 bitvec = { version = "1.0.1", default-features = false }
+derive_more = { version = "1.0.0", default-features = false }
 fastlem = { version = "0.1.4", default-features = false }
 fastlem-random-terrain = { path = "crates/fastlem-random-terrain", default-features = false }
 fastrand = { version = "2.1.1", default-features = false }
 fastrand-contrib = { version = "0.1.0", default-features = false }
 indexmap = { version = "2.5.0", default-features = false }
 itertools = { version = "0.13.0", default-features = false }
-leafwing-input-manager = { version = "0.15.0", default-features = false }
+leafwing-input-manager = { version = "0.15.1", default-features = false }
 log = { version = "0.4.22", default-features = false }
 noise = { version = "0.9.0", default-features = false }
 num_enum = { version = "0.7.3", default-features = false }
 ordered-float = { version = "4.2.2", default-features = false }
 pathfinding = { version = "4.11.0", default-features = false }
+serde = { version = "1.0.210", default-features = false }
+serde_json = { version = "1.0.128", default-features = false }
 strum = { version = "0.26.3", default-features = false }
 terrain-graph = { version = "1.0.1", default-features = false }
 tracing = { version = "0.1.40", default-features = false }
-woodpecker_ui = { git = "https://github.com/StarArawn/woodpecker_ui", default-features = false }
 
 [workspace.lints.clippy]
 arithmetic_side_effects = "warn"
 
 [patch.crates-io]
 bevy_ecs_tilemap = { git = "https://github.com/teohhanhui/bevy_ecs_tilemap", branch = "workaround/wgpu-gles-texture-type-inference" }
-bevy_eventlistener = { git = "https://github.com/StarArawn/bevy_eventlistener", branch = "main" }
-bevy_mod_picking = { git = "https://github.com/StarArawn/bevy_mod_picking", branch = "main" }
-bevy_vello = { git = "https://github.com/linebender/bevy_vello", rev = "7fe648ccb9766ecf2ef469f08c9f21093c3544e6" }
-leafwing-input-manager = { git = "https://github.com/Leafwing-Studios/leafwing-input-manager", branch = "main" }
 
 # Enable a small amount of optimization in the dev profile.
 [profile.dev]
