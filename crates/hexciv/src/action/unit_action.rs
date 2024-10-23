@@ -1,7 +1,5 @@
-use bevy::input::keyboard::KeyCode;
-use bevy::reflect::Reflect;
-use leafwing_input_manager::input_map::InputMap;
-use leafwing_input_manager::Actionlike;
+use bevy::prelude::*;
+use leafwing_input_manager::prelude::*;
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Actionlike, Reflect)]
 pub enum UnitAction {

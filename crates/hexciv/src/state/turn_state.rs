@@ -1,8 +1,8 @@
-use bevy::state::state::States;
+use bevy::prelude::*;
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default, States)]
 pub enum TurnState {
-    Playing,
     #[default]
     Processing,
+    Playing,
 }

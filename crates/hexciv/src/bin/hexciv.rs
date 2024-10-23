@@ -1,6 +1,6 @@
 use std::any::TypeId;
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::iter;
 use std::ops::Add;
 
@@ -20,21 +20,25 @@ use fastrand_contrib::RngExt as _;
 use hexciv::action::DebugAction;
 use hexciv::action::{CursorAction, GameSetupAction, GlobalAction, UnitAction};
 use hexciv::civilization::Civilization;
-use hexciv::event::PlayerConnectedEvent;
-use hexciv::game_setup::GameSetup;
+use hexciv::game_setup::{GameRng, GameSetup, MapRng};
 use hexciv::layer::{
     BaseTerrainLayer, BaseTerrainLayerFilter, CivilianUnitLayer, CivilianUnitLayerFilter,
     LandMilitaryUnitLayer, LandMilitaryUnitLayerFilter, RiverLayer, RiverLayerFilter,
     TerrainFeaturesLayer, TerrainFeaturesLayerFilter, UnitLayersFilter, UnitSelectionLayer,
     UnitSelectionLayerFilter, UnitStateLayer, UnitStateLayerFilter,
 };
-use hexciv::player::{Player, PlayerBundle, PlayerState};
-use hexciv::state::{GameSetupState, GameState, TurnState};
+use hexciv::peer::{
+    dispatch_host_broadcast, handle_peer_connected, receive_host_broadcast, send_host_broadcast,
+    start_matchbox_socket, HostBroadcast, HostId, HostingSet, JoiningSet, NetworkEntityMap,
+    OurPeerId, PeerConnected, ReceiveHostBroadcastSet, SocketRxQueue,
+};
+use hexciv::player::{init_our_player, spawn_players, OurPlayer, Player};
+use hexciv::state::{GameState, MultiplayerState, TurnState};
 use hexciv::unit::{
-    CivilianUnit, CivilianUnitBundle, CivilianUnitTileBundle, FullMovementPoints, LandMilitaryUnit,
-    LandMilitaryUnitBundle, LandMilitaryUnitTileBundle, MovementPoints, UnitFilter, UnitId,
-    UnitMoved, UnitSelected, UnitSelection, UnitSelectionTileBundle, UnitState,
-    UnitStateTileBundle, UnitTileBundle, UnitType,
+    handle_unit_spawned, CivilianUnit, CivilianUnitTileBundle, FullMovementPoints,
+    LandMilitaryUnit, LandMilitaryUnitTileBundle, MovementPoints, UnitFilter, UnitId, UnitMoved,
+    UnitSelected, UnitSelection, UnitSelectionTileBundle, UnitSpawned, UnitState,
+    UnitStateModifier, UnitStateTileBundle, UnitTileBundle, UnitType,
 };
 use indexmap::IndexSet;
 use itertools::{chain, repeat_n, Itertools as _};
@@ -43,7 +47,7 @@ use leafwing_input_manager::prelude::*;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use ordered_float::NotNan;
 use pathfinding::directed::astar::astar;
-use strum::VariantArray as _;
+use uuid::Uuid;
 
 // IMPORTANT: The map's dimensions must both be even numbers, due to the
 // assumptions being made in our calculations.
@@ -179,12 +183,6 @@ enum TerrainFeatures {
     Ice = 6,
 }
 
-#[derive(Copy, Clone, IntoPrimitive)]
-#[repr(u32)]
-enum UnitStateModifier {
-    OutOfOrders = 3,
-}
-
 enum EarthLatitude {
     ArticCirle,
     TropicOfCancer,
@@ -194,15 +192,6 @@ enum EarthLatitude {
 
 #[derive(Deref, Resource)]
 struct FontHandle(Handle<Font>);
-
-#[derive(Default, Resource)]
-struct SocketRxQueue(VecDeque<(PeerId, Box<[u8]>)>);
-
-#[derive(Resource)]
-struct MapRng(fastrand::Rng);
-
-#[derive(Resource)]
-struct GameRng(fastrand::Rng);
 
 #[derive(Resource)]
 struct MapTerrain(Terrain2D);
@@ -227,6 +216,9 @@ struct GameSetupSet;
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, SystemSet)]
 struct GamePlayingSet;
+
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, SystemSet)]
+struct TurnPlayingSet;
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, SystemSet)]
 struct SpawnTilemapSet;
@@ -288,30 +280,6 @@ impl Add<BaseTerrainVariant> for BaseTerrain {
             },
             BaseTerrain::Coast | BaseTerrain::Ocean => {
                 unimplemented!("coast and ocean base terrain do not have variants");
-            },
-        }
-    }
-}
-
-impl Add<UnitStateModifier> for UnitState {
-    type Output = Self;
-
-    fn add(self, rhs: UnitStateModifier) -> Self::Output {
-        match self {
-            UnitState::CivilianReady
-            | UnitState::LandMilitaryReady
-            | UnitState::LandMilitaryFortified => {
-                let state: u32 = self.into();
-                let modifier: u32 = rhs.into();
-                Self::try_from(state + modifier).unwrap()
-            },
-            UnitState::CivilianReadyOutOfOrders
-            | UnitState::LandMilitaryReadyOutOfOrders
-            | UnitState::LandMilitaryFortifiedOutOfOrders => {
-                unimplemented!("unit state modifiers are not stackable");
-            },
-            UnitState::CivilianOutOfMoves | UnitState::LandMilitaryOutOfMoves => {
-                unimplemented!("out-of-moves unit states do not have modifiers");
             },
         }
     }
@@ -418,39 +386,32 @@ fn main() {
     .init_resource::<ActionState<UnitAction>>()
     .init_resource::<ActionState<CursorAction>>()
     .init_resource::<SocketRxQueue>()
+    .init_resource::<NetworkEntityMap>()
     .init_resource::<CursorPos>()
     .insert_resource(ClearColor(Srgba::hex("#E9D4B1").unwrap().into()))
     .insert_resource(GameSetupAction::input_map())
     .insert_resource(GlobalAction::input_map())
     .insert_resource(UnitAction::input_map())
     .insert_resource(CursorAction::input_map())
-    .init_state::<GameSetupState>()
+    .init_state::<MultiplayerState>()
     .init_state::<GameState>()
     .init_state::<TurnState>()
+    .add_event::<HostBroadcast>()
+    .add_event::<PeerConnected>()
+    .add_event::<UnitSpawned>()
     .add_event::<UnitSelected>()
     .add_event::<UnitMoved>()
     .configure_sets(
         Update,
         (
+            HostingSet.run_if(in_state(MultiplayerState::Hosting)),
+            JoiningSet.run_if(in_state(MultiplayerState::Joining)),
             GameSetupSet.run_if(in_state(GameState::Setup)),
             GamePlayingSet.run_if(in_state(GameState::Playing)),
+            TurnPlayingSet.run_if(in_state(TurnState::Playing)),
         ),
     )
     .add_systems(Startup, (setup, start_matchbox_socket))
-    .add_systems(
-        Update,
-        (
-            (
-                host_game.run_if(action_just_pressed(GameSetupAction::HostGame)),
-                join_game.run_if(action_just_pressed(GameSetupAction::JoinGame)),
-            )
-                .run_if(in_state(GameSetupState::Inactive)),
-            wait_for_players.run_if(
-                in_state(GameSetupState::Hosting).or_else(in_state(GameSetupState::Joining)),
-            ),
-        )
-            .in_set(GameSetupSet),
-    )
     .add_systems(
         OnEnter(GameState::Playing),
         (spawn_tilemap, post_spawn_tilemap)
@@ -459,15 +420,32 @@ fn main() {
     )
     .add_systems(
         OnEnter(GameState::Playing),
-        upgrade_camera
-            .after(SpawnTilemapSet)
-            .before(spawn_starting_units),
+        upgrade_camera.after(SpawnTilemapSet),
     )
     .add_systems(
         OnEnter(GameState::Playing),
-        (spawn_players, spawn_starting_units)
-            .chain()
-            .after(SpawnTilemapSet),
+        (
+            (receive_host_broadcast, dispatch_host_broadcast)
+                .chain()
+                .run_if(in_state(MultiplayerState::Joining))
+                .in_set(ReceiveHostBroadcastSet),
+            handle_peer_connected,
+        )
+            .chain(),
+    )
+    .add_systems(
+        OnEnter(GameState::Playing),
+        (
+            spawn_players,
+            init_our_player
+                .after(ReceiveHostBroadcastSet)
+                .after(handle_peer_connected),
+            spawn_starting_units
+                .after(SpawnTilemapSet)
+                .after(upgrade_camera)
+                .run_if(in_state(MultiplayerState::Hosting)),
+        )
+            .chain(),
     )
     .add_systems(
         OnEnter(TurnState::Playing),
@@ -482,6 +460,44 @@ fn main() {
     .add_systems(
         Update,
         (
+            (
+                host_game.run_if(action_just_pressed(GameSetupAction::HostGame)),
+                join_game.run_if(action_just_pressed(GameSetupAction::JoinGame)),
+            )
+                .run_if(in_state(MultiplayerState::Inactive)),
+            wait_for_peers
+                .before(send_host_broadcast)
+                .before(ReceiveHostBroadcastSet)
+                .before(handle_peer_connected)
+                .run_if(
+                    in_state(MultiplayerState::Hosting)
+                        .or_else(in_state(MultiplayerState::Joining)),
+                ),
+        )
+            .in_set(GameSetupSet),
+    )
+    .add_systems(
+        Update,
+        (
+            send_host_broadcast
+                .run_if(resource_exists::<OurPeerId>.and_then(resource_exists::<HostId>))
+                .in_set(HostingSet),
+            (receive_host_broadcast, dispatch_host_broadcast)
+                .chain()
+                .run_if(resource_exists::<OurPeerId>.and_then(resource_exists::<HostId>))
+                .in_set(JoiningSet)
+                .in_set(ReceiveHostBroadcastSet),
+        ),
+    )
+    .add_systems(
+        Update,
+        (handle_peer_connected, handle_unit_spawned)
+            .after(ReceiveHostBroadcastSet)
+            .in_set(GamePlayingSet),
+    )
+    .add_systems(
+        Update,
+        (
             cycle_ready_unit,
             sync_unit_selected,
             focus_camera_on_active_unit,
@@ -492,7 +508,8 @@ fn main() {
                     .or_else(action_just_pressed(GlobalAction::NextReadyUnit))
                     .and_then(has_ready_units),
             )
-            .in_set(GamePlayingSet),
+            .in_set(GamePlayingSet)
+            .in_set(TurnPlayingSet),
     )
     .add_systems(
         Update,
@@ -500,7 +517,8 @@ fn main() {
             mark_active_unit_out_of_orders.run_if(action_just_pressed(UnitAction::SkipTurn)),
             mark_active_unit_fortified.run_if(action_just_pressed(UnitAction::Fortify)),
         )
-            .in_set(GamePlayingSet),
+            .in_set(GamePlayingSet)
+            .in_set(TurnPlayingSet),
     )
     .add_systems(
         Update,
@@ -514,12 +532,16 @@ fn main() {
             (select_unit, sync_unit_selected)
                 .chain()
                 .run_if(action_just_pressed(CursorAction::Click)),
-            (move_active_unit_to, sync_unit_moved).chain().run_if(
-                action_just_pressed(CursorAction::SecondaryClick)
-                    .and_then(should_move_active_unit_to),
-            ),
+            (move_active_unit_to, sync_unit_moved)
+                .chain()
+                .run_if(
+                    action_just_pressed(CursorAction::SecondaryClick)
+                        .and_then(should_move_active_unit_to),
+                )
+                .in_set(TurnPlayingSet),
         )
             .after(update_cursor_tile_pos)
+            .run_if(resource_exists::<CursorTilePos>)
             .in_set(GamePlayingSet),
     );
 
@@ -566,16 +588,10 @@ fn setup(mut commands: Commands, font_handle: Res<FontHandle>) {
         .insert(ActionsLegend);
 }
 
-fn start_matchbox_socket(mut commands: Commands) {
-    let room_url = "ws://127.0.0.1:3536/hexciv?next=2";
-    info!(room_url, "connecting to matchbox server");
-    commands.insert_resource(MatchboxSocket::new_reliable(room_url));
-}
-
 fn host_game(
     mut commands: Commands,
     mut actions_legend_text_query: Query<(&mut Text,), With<ActionsLegend>>,
-    mut next_game_setup_state: ResMut<NextState<GameSetupState>>,
+    mut next_multiplayer_state: ResMut<NextState<MultiplayerState>>,
 ) {
     let (mut actions_legend_text,) = actions_legend_text_query.get_single_mut().unwrap();
 
@@ -584,36 +600,34 @@ fn host_game(
     commands.insert_resource(MapRng(fastrand::Rng::new()));
     commands.insert_resource(GameRng(fastrand::Rng::new()));
 
-    next_game_setup_state.set(GameSetupState::Hosting);
+    next_multiplayer_state.set(MultiplayerState::Hosting);
 }
 
 fn join_game(
     mut actions_legend_text_query: Query<(&mut Text,), With<ActionsLegend>>,
-    mut next_game_setup_state: ResMut<NextState<GameSetupState>>,
+    mut next_multiplayer_state: ResMut<NextState<MultiplayerState>>,
 ) {
     let (mut actions_legend_text,) = actions_legend_text_query.get_single_mut().unwrap();
 
     actions_legend_text.sections[0].value = "Joining game...\n".to_owned();
 
-    next_game_setup_state.set(GameSetupState::Joining);
+    next_multiplayer_state.set(MultiplayerState::Joining);
 }
 
 #[allow(clippy::too_many_arguments)]
-fn wait_for_players(
+fn wait_for_peers(
     mut commands: Commands,
     mut socket: ResMut<MatchboxSocket<SingleChannel>>,
     mut socket_rx_queue: ResMut<SocketRxQueue>,
     map_rng: Option<Res<MapRng>>,
     game_rng: Option<Res<GameRng>>,
     mut actions_legend_text_query: Query<(&mut Text,), With<ActionsLegend>>,
-    game_setup_state: Res<State<GameSetupState>>,
+    multiplayer_state: Res<State<MultiplayerState>>,
     mut next_game_state: ResMut<NextState<GameState>>,
+    mut host_broadcast_events: EventWriter<HostBroadcast>,
+    mut peer_connected_events: EventWriter<PeerConnected>,
 ) {
     let (mut actions_legend_text,) = actions_legend_text_query.get_single_mut().unwrap();
-
-    let _ = socket
-        .get_channel(0)
-        .expect("matchbox socket should be available");
 
     // Check for new connections.
     socket.update_peers();
@@ -631,40 +645,48 @@ fn wait_for_players(
 
     info!("all peers have connected");
 
-    match game_setup_state.get() {
-        GameSetupState::Hosting => {
+    let our_peer_id = socket
+        .id()
+        .expect("our peer should have an assigned peer id");
+
+    let host_id = match multiplayer_state.get() {
+        MultiplayerState::Hosting => {
+            let host_id = our_peer_id;
             let game_setup = GameSetup {
                 map_seed: map_rng.expect("map_rng should not be None").0.get_seed(),
                 game_seed: game_rng.expect("game_rng should not be None").0.get_seed(),
                 num_players,
             };
+            debug!(
+                ?game_setup,
+                ?host_id,
+                ?peers,
+                "sending broadcast of game setup from host"
+            );
             let game_setup_message =
                 serde_json::to_vec(&game_setup).expect("serializing game setup should not fail");
-            let host_id = socket.id().expect("host should have an assigned peer id");
-            let player_connected_events: Vec<_> = iter::once(&host_id)
-                .chain(peers.iter())
-                .enumerate()
-                .map(|(i, &peer)| PlayerConnectedEvent {
-                    player_slot_index: i.try_into().unwrap(),
-                    peer_id: peer,
-                })
-                .collect();
-            let player_connected_event_messages = player_connected_events
-                .iter()
-                .map(serde_json::to_vec)
-                .collect::<Result<Vec<_>, _>>()
-                .expect("serializing player connected event should not fail");
-            for peer in peers {
-                socket.send(game_setup_message.clone().into(), peer);
-                for player_connected_event_message in &player_connected_event_messages {
-                    socket.send(player_connected_event_message.clone().into(), peer);
-                }
+            for &peer_id in &peers {
+                socket.send(game_setup_message.clone().into(), peer_id);
             }
+            for peer_connected in
+                iter::once(host_id)
+                    .chain(peers)
+                    .enumerate()
+                    .map(|(i, peer_id)| PeerConnected {
+                        peer_id,
+                        player_slot_index: i.try_into().unwrap(),
+                    })
+            {
+                host_broadcast_events.send(HostBroadcast::PeerConnected(peer_connected));
+                // Send the peer connected event to be used on the host itself.
+                peer_connected_events.send(peer_connected);
+            }
+            host_id
         },
-        GameSetupState::Joining => {
+        MultiplayerState::Joining => {
             socket_rx_queue.0.extend(socket.receive());
             let Some((host_id, game_setup_message)) = socket_rx_queue.0.front() else {
-                // Wait for game setup messsage.
+                // Keep waiting for game setup messsage.
                 return;
             };
             let game_setup = serde_json::from_slice(game_setup_message)
@@ -676,30 +698,21 @@ fn wait_for_players(
                 num_players,
             } = game_setup;
             if socket_rx_queue.0.len() < (num_players + 1).into() {
-                // Wait for player connected event messages.
+                // Keep waiting for peer connected event messages.
                 return;
             }
             let (host_id, _) = socket_rx_queue.0.pop_front().unwrap();
-            for _i in 0..num_players {
-                let (peer, player_connected_event_message) = socket_rx_queue.0.pop_front().unwrap();
-                assert!(peer == host_id);
-                let player_connected_event: PlayerConnectedEvent =
-                    serde_json::from_slice(&player_connected_event_message)
-                        .expect("deserializing player connected event should not fail");
-                debug!(
-                    ?player_connected_event,
-                    ?host_id,
-                    "received player connected event"
-                );
-                // TODO: Do something with the data.
-            }
             commands.insert_resource(MapRng(fastrand::Rng::with_seed(map_seed)));
             commands.insert_resource(GameRng(fastrand::Rng::with_seed(game_seed)));
+            host_id
         },
         _ => {
-            unreachable!("game setup state should not be inactive");
+            unreachable!("multiplayer state should not be inactive");
         },
-    }
+    };
+
+    commands.insert_resource(OurPeerId(our_peer_id));
+    commands.insert_resource(HostId(host_id));
 
     next_game_state.set(GameState::Playing);
 }
@@ -711,7 +724,31 @@ fn spawn_tilemap(
     mut map_rng: ResMut<MapRng>,
     mut actions_legend_text_query: Query<(&mut Text,), With<ActionsLegend>>,
 ) {
-    let image_handles = vec![
+    let rng = &mut map_rng.0;
+    info!(seed = rng.get_seed(), "map seed");
+
+    let (mut actions_legend_text,) = actions_legend_text_query.get_single_mut().unwrap();
+
+    actions_legend_text.sections[0].value = "".to_owned();
+
+    let map_size = TilemapSize {
+        x: MAP_SIDE_LENGTH_X,
+        y: MAP_SIDE_LENGTH_Y,
+    };
+
+    let terrain = {
+        let config = fastlem_random_terrain::Config {
+            seed: rng.u32(..),
+            land_ratio: rng.f64_range(0.29..=0.6),
+            ..Default::default()
+        };
+        info!(?config, "fastlem-random-terrain config");
+        generate_terrain(&config, BOUND_MIN, BOUND_MAX, BOUND_RANGE)
+    };
+
+    // Spawn base terrain layer.
+
+    let base_terrain_image_handles = vec![
         asset_server.load("tiles/plains.png"),
         asset_server.load("tiles/grassland.png"),
         asset_server.load("tiles/desert.png"),
@@ -730,33 +767,10 @@ fn spawn_tilemap(
         asset_server.load("tiles/coast.png"),
         asset_server.load("tiles/ocean.png"),
     ];
-    let texture_vec = TilemapTexture::Vector(image_handles);
+    let base_terrain_texture_vec = TilemapTexture::Vector(base_terrain_image_handles);
 
-    let (mut actions_legend_text,) = actions_legend_text_query.get_single_mut().unwrap();
-
-    actions_legend_text.sections[0].value = "".to_owned();
-
-    let map_size = TilemapSize {
-        x: MAP_SIDE_LENGTH_X,
-        y: MAP_SIDE_LENGTH_Y,
-    };
-
-    let rng = &mut map_rng.0;
-    info!(seed = rng.get_seed(), "map seed");
-
-    let terrain = {
-        let config = fastlem_random_terrain::Config {
-            seed: rng.u32(..),
-            land_ratio: rng.f64_range(0.29..=0.6),
-            ..Default::default()
-        };
-        info!(?config, "fastlem-random-terrain config");
-        generate_terrain(&config, BOUND_MIN, BOUND_MAX, BOUND_RANGE)
-    };
-
-    let mut tile_storage = TileStorage::empty(map_size);
-    let tilemap_entity = commands.spawn_empty().id();
-    let tilemap_id = TilemapId(tilemap_entity);
+    let mut base_terrain_tile_storage = TileStorage::empty(map_size);
+    let base_terrain_tilemap_entity = commands.spawn_empty().id();
 
     for x in 0..map_size.x {
         for y in 0..map_size.y {
@@ -809,23 +823,23 @@ fn spawn_tilemap(
             let tile_entity = commands
                 .spawn(TileBundle {
                     position: tile_pos,
-                    tilemap_id,
+                    tilemap_id: TilemapId(base_terrain_tilemap_entity),
                     texture_index,
                     ..Default::default()
                 })
                 .insert(BaseTerrainLayer)
                 .id();
-            tile_storage.set(&tile_pos, tile_entity);
+            base_terrain_tile_storage.set(&tile_pos, tile_entity);
         }
     }
 
     commands
-        .entity(tilemap_entity)
+        .entity(base_terrain_tilemap_entity)
         .insert(TilemapBundle {
             grid_size: GRID_SIZE,
             size: map_size,
-            storage: tile_storage,
-            texture: texture_vec,
+            storage: base_terrain_tile_storage,
+            texture: base_terrain_texture_vec,
             tile_size: TILE_SIZE,
             map_type: MAP_TYPE,
             transform: get_tilemap_center_transform(
@@ -838,7 +852,9 @@ fn spawn_tilemap(
         })
         .insert(BaseTerrainLayer);
 
-    let image_handles = {
+    // Spawn river layer.
+
+    let river_image_handles = {
         let image_map: BTreeMap<u32, Handle<Image>> = repeat_n([true, false].into_iter(), 6)
             .multi_cartesian_product()
             .map(|data| {
@@ -866,18 +882,18 @@ fn spawn_tilemap(
         }
         image_vec
     };
-    let texture_vec = TilemapTexture::Vector(image_handles);
+    let river_texture_vec = TilemapTexture::Vector(river_image_handles);
 
-    let tile_storage = TileStorage::empty(map_size);
-    let tilemap_entity = commands.spawn_empty().id();
+    let river_tile_storage = TileStorage::empty(map_size);
+    let river_tilemap_entity = commands.spawn_empty().id();
 
     commands
-        .entity(tilemap_entity)
+        .entity(river_tilemap_entity)
         .insert(TilemapBundle {
             grid_size: GRID_SIZE,
             size: map_size,
-            storage: tile_storage,
-            texture: texture_vec,
+            storage: river_tile_storage,
+            texture: river_texture_vec,
             tile_size: TILE_SIZE,
             map_type: MAP_TYPE,
             transform: get_tilemap_center_transform(
@@ -890,7 +906,9 @@ fn spawn_tilemap(
         })
         .insert(RiverLayer);
 
-    let image_handles = vec![
+    // Spawn terrain features layer.
+
+    let terrain_features_image_handles = vec![
         // TODO: woods
         asset_server.load("tiles/transparent.png"),
         // TODO: rainforest
@@ -904,18 +922,18 @@ fn spawn_tilemap(
         asset_server.load("tiles/transparent.png"),
         asset_server.load("tiles/ice.png"),
     ];
-    let texture_vec = TilemapTexture::Vector(image_handles);
+    let terrain_features_texture_vec = TilemapTexture::Vector(terrain_features_image_handles);
 
-    let tile_storage = TileStorage::empty(map_size);
-    let tilemap_entity = commands.spawn_empty().id();
+    let terrain_features_tile_storage = TileStorage::empty(map_size);
+    let terrain_features_tilemap_entity = commands.spawn_empty().id();
 
     commands
-        .entity(tilemap_entity)
+        .entity(terrain_features_tilemap_entity)
         .insert(TilemapBundle {
             grid_size: GRID_SIZE,
             size: map_size,
-            storage: tile_storage,
-            texture: texture_vec,
+            storage: terrain_features_tile_storage,
+            texture: terrain_features_texture_vec,
             tile_size: TILE_SIZE,
             map_type: MAP_TYPE,
             transform: get_tilemap_center_transform(
@@ -929,6 +947,123 @@ fn spawn_tilemap(
         .insert(TerrainFeaturesLayer);
 
     commands.insert_resource(MapTerrain(terrain));
+
+    // Spawn unit selection layer.
+
+    let unit_selection_image_handles = vec![asset_server.load("units/active.png")];
+    let unit_selection_texture_vec = TilemapTexture::Vector(unit_selection_image_handles);
+
+    let unit_selection_tile_storage = TileStorage::empty(map_size);
+    let unit_selection_tilemap_entity = commands.spawn_empty().id();
+
+    commands
+        .entity(unit_selection_tilemap_entity)
+        .insert(TilemapBundle {
+            grid_size: GRID_SIZE,
+            size: map_size,
+            storage: unit_selection_tile_storage,
+            texture: unit_selection_texture_vec,
+            tile_size: TILE_SIZE,
+            map_type: MAP_TYPE,
+            transform: get_tilemap_center_transform(
+                &map_size,
+                &GRID_SIZE,
+                &MAP_TYPE,
+                UnitSelectionLayer::Z_INDEX,
+            ),
+            ..Default::default()
+        })
+        .insert(UnitSelectionLayer);
+
+    // Spawn unit state layer.
+
+    let unit_state_image_handles = vec![
+        asset_server.load("units/civilian-ready.png"),
+        asset_server.load("units/land-military-ready.png"),
+        asset_server.load("units/land-military-fortified.png"),
+        asset_server.load("units/civilian-ready-out-of-orders.png"),
+        asset_server.load("units/land-military-ready-out-of-orders.png"),
+        asset_server.load("units/land-military-fortified-out-of-orders.png"),
+        asset_server.load("units/civilian-out-of-moves.png"),
+        asset_server.load("units/land-military-out-of-moves.png"),
+    ];
+    let unit_state_texture_vec = TilemapTexture::Vector(unit_state_image_handles);
+
+    let unit_state_tile_storage = TileStorage::empty(map_size);
+    let unit_state_tilemap_entity = commands.spawn_empty().id();
+
+    commands
+        .entity(unit_state_tilemap_entity)
+        .insert(TilemapBundle {
+            grid_size: GRID_SIZE,
+            size: map_size,
+            storage: unit_state_tile_storage,
+            texture: unit_state_texture_vec,
+            tile_size: TILE_SIZE,
+            map_type: MAP_TYPE,
+            transform: get_tilemap_center_transform(
+                &map_size,
+                &GRID_SIZE,
+                &MAP_TYPE,
+                UnitStateLayer::Z_INDEX,
+            ),
+            ..Default::default()
+        })
+        .insert(UnitStateLayer);
+
+    // Spawn civilian unit layer.
+
+    let civilian_unit_image_handles = vec![asset_server.load("units/settler.png")];
+    let civilian_unit_texture_vec = TilemapTexture::Vector(civilian_unit_image_handles);
+
+    let civilian_unit_tile_storage = TileStorage::empty(map_size);
+    let civilian_unit_tilemap_entity = commands.spawn_empty().id();
+
+    commands
+        .entity(civilian_unit_tilemap_entity)
+        .insert(TilemapBundle {
+            grid_size: GRID_SIZE,
+            size: map_size,
+            storage: civilian_unit_tile_storage,
+            texture: civilian_unit_texture_vec,
+            tile_size: TILE_SIZE,
+            map_type: MAP_TYPE,
+            transform: get_tilemap_center_transform(
+                &map_size,
+                &GRID_SIZE,
+                &MAP_TYPE,
+                CivilianUnitLayer::Z_INDEX,
+            ),
+            ..Default::default()
+        })
+        .insert(CivilianUnitLayer);
+
+    // Spawn land military unit layer.
+
+    let land_military_unit_image_handles = vec![asset_server.load("units/warrior.png")];
+    let land_military_unit_texture_vec = TilemapTexture::Vector(land_military_unit_image_handles);
+
+    let land_military_unit_tile_storage = TileStorage::empty(map_size);
+    let land_military_unit_tilemap_entity = commands.spawn_empty().id();
+
+    commands
+        .entity(land_military_unit_tilemap_entity)
+        .insert(TilemapBundle {
+            grid_size: GRID_SIZE,
+            size: map_size,
+            storage: land_military_unit_tile_storage,
+            texture: land_military_unit_texture_vec,
+            tile_size: TILE_SIZE,
+            map_type: MAP_TYPE,
+            transform: get_tilemap_center_transform(
+                &map_size,
+                &GRID_SIZE,
+                &MAP_TYPE,
+                LandMilitaryUnitLayer::Z_INDEX,
+            ),
+            ..Default::default()
+        })
+        .insert(LandMilitaryUnitLayer);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1168,53 +1303,15 @@ fn upgrade_camera(mut commands: Commands, camera_query: Query<(Entity,), With<Ca
     });
 }
 
-fn spawn_players(mut commands: Commands, mut game_rng: ResMut<GameRng>) {
-    let rng = &mut game_rng.0;
-    info!(seed = rng.get_seed(), "game seed");
-
-    let civs = rng.choose_multiple(Civilization::VARIANTS.iter(), 2);
-
-    for (i, &civ) in civs.into_iter().enumerate() {
-        commands.spawn({
-            let mut player_bundle = PlayerBundle::new(civ);
-            if i == 0 {
-                player_bundle.player_state = PlayerState::Playing;
-            }
-            player_bundle
-        });
-    }
-}
-
 fn spawn_starting_units(
-    mut commands: Commands,
-    asset_server: Res<AssetServer>,
     mut next_turn_state: ResMut<NextState<TurnState>>,
     mut game_rng: ResMut<GameRng>,
     player_query: Query<(&Civilization,), With<Player>>,
     base_terrain_tilemap_query: Query<(&TilemapSize, &TileStorage), BaseTerrainLayerFilter>,
     base_terrain_tile_query: Query<(&TileTextureIndex,), BaseTerrainLayerFilter>,
+    mut host_broadcast_events: EventWriter<HostBroadcast>,
+    mut unit_spawned_events: EventWriter<UnitSpawned>,
 ) {
-    let image_handles = vec![asset_server.load("units/active.png")];
-    let unit_selection_texture_vec = TilemapTexture::Vector(image_handles);
-
-    let image_handles = vec![
-        asset_server.load("units/civilian-ready.png"),
-        asset_server.load("units/land-military-ready.png"),
-        asset_server.load("units/land-military-fortified.png"),
-        asset_server.load("units/civilian-ready-out-of-orders.png"),
-        asset_server.load("units/land-military-ready-out-of-orders.png"),
-        asset_server.load("units/land-military-fortified-out-of-orders.png"),
-        asset_server.load("units/civilian-out-of-moves.png"),
-        asset_server.load("units/land-military-out-of-moves.png"),
-    ];
-    let unit_state_texture_vec = TilemapTexture::Vector(image_handles);
-
-    let image_handles = vec![asset_server.load("units/settler.png")];
-    let civilian_unit_texture_vec = TilemapTexture::Vector(image_handles);
-
-    let image_handles = vec![asset_server.load("units/warrior.png")];
-    let land_military_unit_texture_vec = TilemapTexture::Vector(image_handles);
-
     let rng = &mut game_rng.0;
 
     let (map_size, base_terrain_tile_storage) = base_terrain_tilemap_query.get_single().unwrap();
@@ -1240,13 +1337,6 @@ fn spawn_starting_units(
             allowable_starting_positions.insert(tile_pos);
         }
     }
-
-    let mut unit_state_tile_storage = TileStorage::empty(*map_size);
-    let unit_state_tilemap_entity = commands.spawn_empty().id();
-    let mut civilian_unit_tile_storage = TileStorage::empty(*map_size);
-    let civilian_unit_tilemap_entity = commands.spawn_empty().id();
-    let mut land_military_unit_tile_storage = TileStorage::empty(*map_size);
-    let land_military_unit_tilemap_entity = commands.spawn_empty().id();
 
     for (&civ,) in player_query.iter() {
         // TODO: Space out the starting positions for different civs.
@@ -1280,181 +1370,45 @@ fn spawn_starting_units(
         };
 
         // Spawn settler.
-        {
-            let civilian_unit = CivilianUnit::Settler;
-            let unit_entity = commands
-                .spawn(CivilianUnitBundle::new(
-                    settler_tile_pos,
-                    civ,
-                    civilian_unit,
-                ))
-                .id();
-            let tile_entity = commands
-                .spawn(CivilianUnitTileBundle::new(
-                    settler_tile_pos,
-                    civilian_unit,
-                    civ,
-                    TilemapId(civilian_unit_tilemap_entity),
-                    UnitId(unit_entity),
-                ))
-                .id();
-            civilian_unit_tile_storage.set(&settler_tile_pos, tile_entity);
-            let tile_entity = commands
-                .spawn(UnitStateTileBundle::new(
-                    settler_tile_pos,
-                    UnitType::Civilian(civilian_unit),
-                    civ,
-                    TilemapId(unit_state_tilemap_entity),
-                    UnitId(unit_entity),
-                ))
-                .id();
-            unit_state_tile_storage.set(&settler_tile_pos, tile_entity);
-        }
+        let unit_spawned = UnitSpawned {
+            network_id: Uuid::new_v4().into(),
+            position: settler_tile_pos,
+            unit_type: CivilianUnit::Settler.into(),
+            civ,
+        };
+        host_broadcast_events.send(HostBroadcast::UnitSpawned(unit_spawned));
+        unit_spawned_events.send(unit_spawned);
 
         // Spawn warrior.
-        {
-            let land_military_unit = LandMilitaryUnit::Warrior;
-            let unit_entity = commands
-                .spawn(LandMilitaryUnitBundle::new(
-                    warrior_tile_pos,
-                    civ,
-                    land_military_unit,
-                ))
-                .id();
-            let tile_entity = commands
-                .spawn(LandMilitaryUnitTileBundle::new(
-                    warrior_tile_pos,
-                    land_military_unit,
-                    civ,
-                    TilemapId(land_military_unit_tilemap_entity),
-                    UnitId(unit_entity),
-                ))
-                .id();
-            land_military_unit_tile_storage.set(&warrior_tile_pos, tile_entity);
-            let tile_entity = commands
-                .spawn(UnitStateTileBundle::new(
-                    warrior_tile_pos,
-                    UnitType::LandMilitary(land_military_unit),
-                    civ,
-                    TilemapId(unit_state_tilemap_entity),
-                    UnitId(unit_entity),
-                ))
-                .id();
-            unit_state_tile_storage.set(&warrior_tile_pos, tile_entity);
-        }
+        let unit_spawned = UnitSpawned {
+            network_id: Uuid::new_v4().into(),
+            position: warrior_tile_pos,
+            unit_type: LandMilitaryUnit::Warrior.into(),
+            civ,
+        };
+        host_broadcast_events.send(HostBroadcast::UnitSpawned(unit_spawned));
+        unit_spawned_events.send(unit_spawned);
     }
-
-    {
-        let tile_storage = TileStorage::empty(*map_size);
-        let tilemap_entity = commands.spawn_empty().id();
-
-        commands
-            .entity(tilemap_entity)
-            .insert(TilemapBundle {
-                grid_size: GRID_SIZE,
-                size: *map_size,
-                storage: tile_storage,
-                texture: unit_selection_texture_vec,
-                tile_size: TILE_SIZE,
-                map_type: MAP_TYPE,
-                transform: get_tilemap_center_transform(
-                    map_size,
-                    &GRID_SIZE,
-                    &MAP_TYPE,
-                    UnitSelectionLayer::Z_INDEX,
-                ),
-                ..Default::default()
-            })
-            .insert(UnitSelectionLayer);
-    }
-
-    commands
-        .entity(unit_state_tilemap_entity)
-        .insert(TilemapBundle {
-            grid_size: GRID_SIZE,
-            size: *map_size,
-            storage: unit_state_tile_storage,
-            texture: unit_state_texture_vec,
-            tile_size: TILE_SIZE,
-            map_type: MAP_TYPE,
-            transform: get_tilemap_center_transform(
-                map_size,
-                &GRID_SIZE,
-                &MAP_TYPE,
-                UnitStateLayer::Z_INDEX,
-            ),
-            ..Default::default()
-        })
-        .insert(UnitStateLayer);
-
-    commands
-        .entity(civilian_unit_tilemap_entity)
-        .insert(TilemapBundle {
-            grid_size: GRID_SIZE,
-            size: *map_size,
-            storage: civilian_unit_tile_storage,
-            texture: civilian_unit_texture_vec,
-            tile_size: TILE_SIZE,
-            map_type: MAP_TYPE,
-            transform: get_tilemap_center_transform(
-                map_size,
-                &GRID_SIZE,
-                &MAP_TYPE,
-                CivilianUnitLayer::Z_INDEX,
-            ),
-            ..Default::default()
-        })
-        .insert(CivilianUnitLayer);
-
-    commands
-        .entity(land_military_unit_tilemap_entity)
-        .insert(TilemapBundle {
-            grid_size: GRID_SIZE,
-            size: *map_size,
-            storage: land_military_unit_tile_storage,
-            texture: land_military_unit_texture_vec,
-            tile_size: TILE_SIZE,
-            map_type: MAP_TYPE,
-            transform: get_tilemap_center_transform(
-                map_size,
-                &GRID_SIZE,
-                &MAP_TYPE,
-                LandMilitaryUnitLayer::Z_INDEX,
-            ),
-            ..Default::default()
-        })
-        .insert(LandMilitaryUnitLayer);
 
     next_turn_state.set(TurnState::Playing);
 }
 
-/// Resets movement points for units controlled by the current player.
+/// Resets movement points for all units.
 fn reset_movement_points(
-    player_query: Query<(&Civilization, &PlayerState), With<Player>>,
-    mut unit_query: Query<(&Civilization, &mut MovementPoints, &FullMovementPoints), UnitFilter>,
+    mut unit_query: Query<(&mut MovementPoints, &FullMovementPoints), UnitFilter>,
 ) {
-    let (&current_civ, _player_state) = player_query
-        .iter()
-        .find(|(_civ, &player_state)| player_state == PlayerState::Playing)
-        .unwrap();
-
-    for (_civ, mut movement_points, full_movement_points) in unit_query
-        .iter_mut()
-        .filter(|(&civ, _movement_points, _full_movement_points)| civ == current_civ)
-    {
+    for (mut movement_points, full_movement_points) in unit_query.iter_mut() {
         movement_points.0 = full_movement_points.0;
     }
 }
 
 /// Checks if there are ready units controlled by the current player.
 fn has_ready_units(
-    player_query: Query<(&Civilization, &PlayerState), With<Player>>,
+    our_player: Res<OurPlayer>,
+    player_query: Query<(&Civilization,), With<Player>>,
     unit_query: Query<(Entity, &TilePos, &Civilization, &UnitState), UnitFilter>,
 ) -> bool {
-    let (current_civ, _player_state) = player_query
-        .iter()
-        .find(|(_civ, &player_state)| player_state == PlayerState::Playing)
-        .unwrap();
+    let (current_civ,) = player_query.get(our_player.0).unwrap();
 
     unit_query
         .iter()
@@ -1469,8 +1423,9 @@ fn has_ready_units(
 
 /// Cycles to the previous / next ready unit controlled by the current player.
 fn cycle_ready_unit(
+    our_player: Res<OurPlayer>,
     global_action_state: Res<ActionState<GlobalAction>>,
-    player_query: Query<(&Civilization, &PlayerState), With<Player>>,
+    player_query: Query<(&Civilization,), With<Player>>,
     unit_selection_tile_query: Query<
         (&TilePos, &TileTextureIndex, &UnitId),
         UnitSelectionLayerFilter,
@@ -1478,10 +1433,7 @@ fn cycle_ready_unit(
     unit_query: Query<(Entity, &TilePos, &Civilization, &UnitState), UnitFilter>,
     mut unit_selected_events: EventWriter<UnitSelected>,
 ) {
-    let (current_civ, _player_state) = player_query
-        .iter()
-        .find(|(_civ, &player_state)| player_state == PlayerState::Playing)
-        .unwrap();
+    let (current_civ,) = player_query.get(our_player.0).unwrap();
 
     let ready_units: IndexSet<_> = unit_query
         .iter()
@@ -1740,9 +1692,11 @@ fn update_cursor_tile_pos(
 
 /// Selects the unit at the cursor's tile position controlled by the current
 /// player.
+#[allow(clippy::too_many_arguments)]
 fn select_unit(
-    cursor_tile_pos: Option<Res<CursorTilePos>>,
-    player_query: Query<(&Civilization, &PlayerState), With<Player>>,
+    our_player: Res<OurPlayer>,
+    cursor_tile_pos: Res<CursorTilePos>,
+    player_query: Query<(&Civilization,), With<Player>>,
     unit_state_tilemap_query: Query<(&TileStorage,), UnitStateLayerFilter>,
     unit_selection_tile_query: Query<
         (&TilePos, &TileTextureIndex, &UnitId),
@@ -1752,17 +1706,9 @@ fn select_unit(
     unit_query: Query<(Entity, &TilePos, &Civilization), UnitFilter>,
     mut unit_selected_events: EventWriter<UnitSelected>,
 ) {
-    let Some(cursor_tile_pos) = cursor_tile_pos else {
-        // No tile position from cursor.
-        return;
-    };
-
     let (unit_state_tile_storage,) = unit_state_tilemap_query.get_single().unwrap();
 
-    let (&current_civ, _player_state) = player_query
-        .iter()
-        .find(|(_civ, &player_state)| player_state == PlayerState::Playing)
-        .unwrap();
+    let (&current_civ,) = player_query.get(our_player.0).unwrap();
 
     let units: Vec<_> = unit_query
         .iter()
@@ -1829,13 +1775,9 @@ fn select_unit(
 }
 
 fn should_move_active_unit_to(
-    cursor_tile_pos: Option<Res<CursorTilePos>>,
+    cursor_tile_pos: Res<CursorTilePos>,
     unit_selection_tile_query: Query<(&TilePos, &TileTextureIndex), UnitSelectionLayerFilter>,
 ) -> bool {
-    let Some(cursor_tile_pos) = cursor_tile_pos else {
-        // No tile position from cursor.
-        return false;
-    };
     let active_unit_selection =
         unit_selection_tile_query
             .iter()

@@ -35,6 +35,7 @@ serde_json = { version = "1.0.128", default-features = false }
 strum = { version = "0.26.3", default-features = false }
 terrain-graph = { version = "1.0.1", default-features = false }
 tracing = { version = "0.1.40", default-features = false }
+uuid = { version = "1.11.0", default-features = false }
 
 [workspace.lints.clippy]
 arithmetic_side_effects = "warn"
