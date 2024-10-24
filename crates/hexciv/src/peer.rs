@@ -6,7 +6,7 @@ use bevy_matchbox::prelude::*;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::unit::UnitSpawned;
+use crate::unit::{UnitMoved, UnitSpawned};
 
 #[derive(Debug, Resource)]
 pub struct OurPeerId(pub matchbox::PeerId);
@@ -51,6 +51,7 @@ pub struct PeerConnected {
 pub enum HostBroadcast {
     PeerConnected(PeerConnected),
     UnitSpawned(UnitSpawned),
+    UnitMoved(UnitMoved),
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, SystemSet)]
@@ -81,6 +82,24 @@ impl PeerBundle {
             peer_id,
             player_slot_index,
         }
+    }
+}
+
+impl From<PeerConnected> for HostBroadcast {
+    fn from(inner: PeerConnected) -> Self {
+        Self::PeerConnected(inner)
+    }
+}
+
+impl From<UnitSpawned> for HostBroadcast {
+    fn from(inner: UnitSpawned) -> Self {
+        Self::UnitSpawned(inner)
+    }
+}
+
+impl From<UnitMoved> for HostBroadcast {
+    fn from(inner: UnitMoved) -> Self {
+        Self::UnitMoved(inner)
     }
 }
 
@@ -149,6 +168,7 @@ pub fn dispatch_host_broadcast(
     mut host_broadcast_events: EventReader<HostBroadcast>,
     mut peer_connected_events: EventWriter<PeerConnected>,
     mut unit_spawned_events: EventWriter<UnitSpawned>,
+    mut unit_moved_events: EventWriter<UnitMoved>,
 ) {
     assert!(our_peer_id.0 != host_id.0);
     for host_broadcast in host_broadcast_events.read() {
@@ -158,6 +178,9 @@ pub fn dispatch_host_broadcast(
             },
             HostBroadcast::UnitSpawned(unit_spawned) => {
                 unit_spawned_events.send(unit_spawned);
+            },
+            HostBroadcast::UnitMoved(unit_moved) => {
+                unit_moved_events.send(unit_moved);
             },
         }
     }
@@ -171,7 +194,7 @@ pub fn handle_peer_connected(
 ) {
     let mut new_peer_bundles = HashMap::new();
     for peer_connected in peer_connected_events.read() {
-        debug!(?peer_connected, "peer connected");
+        debug!(?peer_connected, "handling peer connected");
         let PeerConnected {
             peer_id: connected_peer_id,
             player_slot_index: connected_player_slot_index,
