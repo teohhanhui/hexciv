@@ -5,7 +5,10 @@ use crate::civilization::Civilization;
 use crate::game_setup::GameRng;
 use crate::peer::{OurPeerId, Peer, PeerId, PlayerSlotIndex};
 
-#[derive(Resource)]
+#[derive(Debug, Resource)]
+pub struct NumPlayers(pub u8);
+
+#[derive(Debug, Resource)]
 pub struct OurPlayer(pub Entity);
 
 #[derive(Component)]
@@ -15,7 +18,7 @@ pub struct Player;
 pub enum PlayerState {
     #[default]
     Playing,
-    EndTurn,
+    WaitingForTurnEnd,
 }
 
 #[derive(Bundle)]
@@ -35,11 +38,15 @@ impl PlayerBundle {
     }
 }
 
-pub fn spawn_players(mut commands: Commands, mut game_rng: ResMut<GameRng>) {
+pub fn spawn_players(
+    mut commands: Commands,
+    mut game_rng: ResMut<GameRng>,
+    num_players: Res<NumPlayers>,
+) {
     let rng = &mut game_rng.0;
     info!(seed = rng.get_seed(), "game seed");
 
-    let civs = rng.choose_multiple(Civilization::VARIANTS.iter(), 2);
+    let civs = rng.choose_multiple(Civilization::VARIANTS.iter(), num_players.0.into());
 
     commands.spawn_batch(civs.into_iter().map(|&civ| PlayerBundle::new(civ)));
 }

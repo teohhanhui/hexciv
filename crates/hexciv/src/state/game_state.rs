@@ -4,5 +4,5 @@ use bevy::prelude::*;
 pub enum GameState {
     #[default]
     Setup,
-    Playing,
+    InGame,
 }

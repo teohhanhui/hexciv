@@ -27,16 +27,18 @@ use hexciv::layer::{
     UnitStateLayerFilter,
 };
 use hexciv::peer::{
-    dispatch_host_broadcast, handle_peer_connected, receive_host_broadcast, send_host_broadcast,
-    start_matchbox_socket, HostBroadcast, HostId, HostingSet, JoiningSet, NetworkEntityMap,
-    NetworkId, OurPeerId, PeerConnected, ReceiveHostBroadcastSet, SocketRxQueue,
+    dispatch_host_broadcast, dispatch_request, handle_peer_connected, receive_host_broadcast,
+    receive_request, send_host_broadcast, send_request, start_matchbox_socket, HostBroadcast,
+    HostId, HostingSet, JoiningSet, OurPeerId, PeerConnected, ReceiveHostBroadcastSet,
+    ReceiveRequestSet, Request, SocketRxQueue,
 };
-use hexciv::player::{init_our_player, spawn_players, OurPlayer, Player};
+use hexciv::player::{init_our_player, spawn_players, NumPlayers, OurPlayer, Player};
 use hexciv::state::{GameState, MultiplayerState, TurnState};
+use hexciv::turn::{handle_turn_started, TurnStarted};
 use hexciv::unit::{
     handle_unit_moved, handle_unit_selected, handle_unit_spawned, ActionsLegend, CivilianUnit,
-    FullMovementPoints, LandMilitaryUnit, MovementPoints, UnitFilter, UnitId, UnitMoved,
-    UnitSelected, UnitSelection, UnitSpawned, UnitState, UnitStateModifier,
+    FullMovementPoints, LandMilitaryUnit, MovementPoints, UnitEntityId, UnitEntityMap, UnitFilter,
+    UnitId, UnitMoved, UnitSelected, UnitSelection, UnitSpawned, UnitState, UnitStateModifier,
 };
 use indexmap::IndexSet;
 use itertools::{chain, repeat_n, Itertools as _};
@@ -210,10 +212,10 @@ struct HighlightedLabel;
 struct GameSetupSet;
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, SystemSet)]
-struct GamePlayingSet;
+struct InGameSet;
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, SystemSet)]
-struct TurnPlayingSet;
+struct TurnInProgressSet;
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, SystemSet)]
 struct SpawnTilemapSet;
@@ -381,7 +383,7 @@ fn main() {
     .init_resource::<ActionState<UnitAction>>()
     .init_resource::<ActionState<CursorAction>>()
     .init_resource::<SocketRxQueue>()
-    .init_resource::<NetworkEntityMap>()
+    .init_resource::<UnitEntityMap>()
     .init_resource::<CursorPos>()
     .insert_resource(ClearColor(Srgba::hex("#E9D4B1").unwrap().into()))
     .insert_resource(GameSetupAction::input_map())
@@ -392,7 +394,9 @@ fn main() {
     .init_state::<GameState>()
     .init_state::<TurnState>()
     .add_event::<HostBroadcast>()
+    .add_event::<Request>()
     .add_event::<PeerConnected>()
+    .add_event::<TurnStarted>()
     .add_event::<UnitSpawned>()
     .add_event::<UnitSelected>()
     .add_event::<UnitMoved>()
@@ -402,23 +406,23 @@ fn main() {
             HostingSet.run_if(in_state(MultiplayerState::Hosting)),
             JoiningSet.run_if(in_state(MultiplayerState::Joining)),
             GameSetupSet.run_if(in_state(GameState::Setup)),
-            GamePlayingSet.run_if(in_state(GameState::Playing)),
-            TurnPlayingSet.run_if(in_state(TurnState::Playing)),
+            InGameSet.run_if(in_state(GameState::InGame)),
+            TurnInProgressSet.run_if(in_state(TurnState::InProgress)),
         ),
     )
     .add_systems(Startup, (setup, start_matchbox_socket))
     .add_systems(
-        OnEnter(GameState::Playing),
+        OnEnter(GameState::InGame),
         (spawn_tilemap, post_spawn_tilemap)
             .chain()
             .in_set(SpawnTilemapSet),
     )
     .add_systems(
-        OnEnter(GameState::Playing),
+        OnEnter(GameState::InGame),
         upgrade_camera.after(SpawnTilemapSet),
     )
     .add_systems(
-        OnEnter(GameState::Playing),
+        OnEnter(GameState::InGame),
         (
             (receive_host_broadcast, dispatch_host_broadcast)
                 .chain()
@@ -429,7 +433,7 @@ fn main() {
             .chain(),
     )
     .add_systems(
-        OnEnter(GameState::Playing),
+        OnEnter(GameState::InGame),
         (
             spawn_players,
             init_our_player
@@ -437,13 +441,12 @@ fn main() {
                 .after(handle_peer_connected),
             spawn_starting_units
                 .after(SpawnTilemapSet)
-                .after(upgrade_camera)
                 .run_if(in_state(MultiplayerState::Hosting)),
         )
             .chain(),
     )
     .add_systems(
-        OnEnter(TurnState::Playing),
+        OnEnter(TurnState::InProgress),
         (
             reset_movement_points,
             cycle_ready_unit.before(handle_unit_selected),
@@ -473,25 +476,41 @@ fn main() {
     .add_systems(
         Update,
         (
-            send_host_broadcast
-                .run_if(resource_exists::<OurPeerId>.and_then(resource_exists::<HostId>))
+            (
+                send_host_broadcast,
+                (
+                    receive_request,
+                    dispatch_request.run_if(on_event::<Request>()),
+                )
+                    .chain()
+                    .in_set(ReceiveRequestSet),
+            )
                 .in_set(HostingSet),
-            (receive_host_broadcast, dispatch_host_broadcast)
-                .chain()
-                .run_if(resource_exists::<OurPeerId>.and_then(resource_exists::<HostId>))
-                .in_set(JoiningSet)
-                .in_set(ReceiveHostBroadcastSet),
-        ),
+            (
+                send_request,
+                (
+                    receive_host_broadcast,
+                    dispatch_host_broadcast.run_if(on_event::<HostBroadcast>()),
+                )
+                    .chain()
+                    .in_set(ReceiveHostBroadcastSet),
+            )
+                .in_set(JoiningSet),
+        )
+            .run_if(resource_exists::<OurPeerId>.and_then(resource_exists::<HostId>)),
     )
     .add_systems(
         Update,
         (
-            handle_peer_connected,
-            handle_unit_spawned,
-            handle_unit_moved.after(handle_unit_spawned), // TODO: Events should not be reordered.
+            // TODO: Ensure events are processed in-order.
+            handle_peer_connected.run_if(on_event::<PeerConnected>()),
+            handle_turn_started.run_if(on_event::<TurnStarted>()),
+            handle_unit_spawned.run_if(on_event::<UnitSpawned>()),
+            handle_unit_moved.run_if(on_event::<UnitMoved>()),
         )
             .after(ReceiveHostBroadcastSet)
-            .in_set(GamePlayingSet),
+            .after(ReceiveRequestSet)
+            .in_set(InGameSet),
     )
     .add_systems(
         Update,
@@ -505,8 +524,8 @@ fn main() {
                     .or_else(action_just_pressed(GlobalAction::NextReadyUnit))
                     .and_then(has_ready_units),
             )
-            .in_set(GamePlayingSet)
-            .in_set(TurnPlayingSet),
+            .in_set(InGameSet)
+            .in_set(TurnInProgressSet),
     )
     .add_systems(
         Update,
@@ -514,14 +533,14 @@ fn main() {
             mark_active_unit_out_of_orders.run_if(action_just_pressed(UnitAction::SkipTurn)),
             mark_active_unit_fortified.run_if(action_just_pressed(UnitAction::Fortify)),
         )
-            .in_set(GamePlayingSet)
-            .in_set(TurnPlayingSet),
+            .in_set(InGameSet)
+            .in_set(TurnInProgressSet),
     )
     .add_systems(
         Update,
         (update_cursor_pos, update_cursor_tile_pos)
             .chain()
-            .in_set(GamePlayingSet),
+            .in_set(InGameSet),
     )
     .add_systems(
         Update,
@@ -534,13 +553,18 @@ fn main() {
                     action_just_pressed(CursorAction::SecondaryClick)
                         .and_then(should_move_active_unit_to),
                 )
-                .in_set(TurnPlayingSet),
+                .in_set(TurnInProgressSet),
         )
             .after(update_cursor_tile_pos)
             .run_if(resource_exists::<CursorTilePos>)
-            .in_set(GamePlayingSet),
+            .in_set(InGameSet),
     )
-    .add_systems(Update, handle_unit_selected.in_set(GamePlayingSet));
+    .add_systems(
+        Update,
+        handle_unit_selected
+            .run_if(on_event::<UnitSelected>())
+            .in_set(InGameSet),
+    );
 
     #[cfg(debug_assertions)]
     {
@@ -559,7 +583,7 @@ fn main() {
                     highlight_tile_labels.after(update_cursor_tile_pos),
                 )
                     .chain()
-                    .in_set(GamePlayingSet),
+                    .in_set(InGameSet),
             );
     }
 
@@ -596,6 +620,7 @@ fn host_game(
 
     commands.insert_resource(MapRng(fastrand::Rng::new()));
     commands.insert_resource(GameRng(fastrand::Rng::new()));
+    commands.insert_resource(NumPlayers(2));
 
     next_multiplayer_state.set(MultiplayerState::Hosting);
 }
@@ -618,10 +643,10 @@ fn wait_for_peers(
     mut socket_rx_queue: ResMut<SocketRxQueue>,
     map_rng: Option<Res<MapRng>>,
     game_rng: Option<Res<GameRng>>,
+    num_players: Option<Res<NumPlayers>>,
     multiplayer_state: Res<State<MultiplayerState>>,
     mut next_game_state: ResMut<NextState<GameState>>,
     mut actions_legend_text_query: Query<(&mut Text,), With<ActionsLegend>>,
-    mut host_broadcast_events: EventWriter<HostBroadcast>,
     mut peer_connected_events: EventWriter<PeerConnected>,
 ) {
     let (mut actions_legend_text,) = actions_legend_text_query.get_single_mut().unwrap();
@@ -630,17 +655,19 @@ fn wait_for_peers(
     socket.update_peers();
 
     let peers: Vec<_> = socket.connected_peers().collect();
-    let num_players: u8 = 2;
-    if peers.len() < (num_players - 1).into() {
-        // Keep waiting until all peers have connected.
-        let msg = "Waiting for peers...\n";
-        if !actions_legend_text.sections[0].value.ends_with(msg) {
-            actions_legend_text.sections[0].value += msg;
-        }
-        return;
-    }
 
-    info!("all peers have connected");
+    if let Some(num_players) = &num_players {
+        if peers.len() < (num_players.0 - 1).into() {
+            // Keep waiting until all peers have connected.
+            let msg = "Waiting for peers...\n";
+            if !actions_legend_text.sections[0].value.ends_with(msg) {
+                actions_legend_text.sections[0].value += msg;
+            }
+            return;
+        }
+
+        info!("all peers have connected");
+    }
 
     let our_peer_id = socket
         .id()
@@ -652,7 +679,7 @@ fn wait_for_peers(
             let game_setup = GameSetup {
                 map_seed: map_rng.expect("map_rng should not be None").0.get_seed(),
                 game_seed: game_rng.expect("game_rng should not be None").0.get_seed(),
-                num_players,
+                num_players: num_players.expect("num_players should not be None").0,
             };
             debug!(
                 ?game_setup,
@@ -665,17 +692,11 @@ fn wait_for_peers(
             for &peer_id in &peers {
                 socket.send(game_setup_message.clone().into(), peer_id);
             }
-            for peer_connected in
-                iter::once(host_id)
-                    .chain(peers)
-                    .enumerate()
-                    .map(|(i, peer_id)| PeerConnected {
-                        peer_id,
-                        player_slot_index: i.try_into().unwrap(),
-                    })
-            {
-                host_broadcast_events.send(peer_connected.into());
-                peer_connected_events.send(peer_connected);
+            for (i, peer_id) in iter::once(host_id).chain(peers).enumerate() {
+                peer_connected_events.send(PeerConnected {
+                    peer_id,
+                    player_slot_index: i.try_into().unwrap(),
+                });
             }
             host_id
         },
@@ -693,13 +714,14 @@ fn wait_for_peers(
                 game_seed,
                 num_players,
             } = game_setup;
+            commands.insert_resource(MapRng(fastrand::Rng::with_seed(map_seed)));
+            commands.insert_resource(GameRng(fastrand::Rng::with_seed(game_seed)));
+            commands.insert_resource(NumPlayers(num_players));
             if socket_rx_queue.0.len() < (num_players + 1).into() {
                 // Keep waiting for peer connected event messages.
                 return;
             }
             let (host_id, _) = socket_rx_queue.0.pop_front().unwrap();
-            commands.insert_resource(MapRng(fastrand::Rng::with_seed(map_seed)));
-            commands.insert_resource(GameRng(fastrand::Rng::with_seed(game_seed)));
             host_id
         },
         _ => {
@@ -710,7 +732,7 @@ fn wait_for_peers(
     commands.insert_resource(OurPeerId(our_peer_id));
     commands.insert_resource(HostId(host_id));
 
-    next_game_state.set(GameState::Playing);
+    next_game_state.set(GameState::InGame);
 }
 
 /// Generates the initial tilemap.
@@ -1301,11 +1323,10 @@ fn upgrade_camera(mut commands: Commands, camera_query: Query<(Entity,), With<Ca
 
 fn spawn_starting_units(
     mut game_rng: ResMut<GameRng>,
-    mut next_turn_state: ResMut<NextState<TurnState>>,
     player_query: Query<(&Civilization,), With<Player>>,
     base_terrain_tilemap_query: Query<(&TilemapSize, &TileStorage), BaseTerrainLayerFilter>,
     base_terrain_tile_query: Query<(&TileTextureIndex,), BaseTerrainLayerFilter>,
-    mut host_broadcast_events: EventWriter<HostBroadcast>,
+    mut turn_started_events: EventWriter<TurnStarted>,
     mut unit_spawned_events: EventWriter<UnitSpawned>,
 ) {
     let rng = &mut game_rng.0;
@@ -1366,27 +1387,23 @@ fn spawn_starting_units(
         };
 
         // Spawn settler.
-        let unit_spawned = UnitSpawned {
-            network_id: Uuid::new_v4().into(),
+        unit_spawned_events.send(UnitSpawned {
+            unit_id: Uuid::new_v4().into(),
             position: settler_tile_pos,
             unit_type: CivilianUnit::Settler.into(),
             civ,
-        };
-        host_broadcast_events.send(unit_spawned.into());
-        unit_spawned_events.send(unit_spawned);
+        });
 
         // Spawn warrior.
-        let unit_spawned = UnitSpawned {
-            network_id: Uuid::new_v4().into(),
+        unit_spawned_events.send(UnitSpawned {
+            unit_id: Uuid::new_v4().into(),
             position: warrior_tile_pos,
             unit_type: LandMilitaryUnit::Warrior.into(),
             civ,
-        };
-        host_broadcast_events.send(unit_spawned.into());
-        unit_spawned_events.send(unit_spawned);
+        });
     }
 
-    next_turn_state.set(TurnState::Playing);
+    turn_started_events.send(TurnStarted { turn_num: 1 });
 }
 
 /// Resets movement points for all units.
@@ -1423,7 +1440,7 @@ fn cycle_ready_unit(
     our_player: Res<OurPlayer>,
     player_query: Query<(&Civilization,), With<Player>>,
     unit_selection_tile_query: Query<
-        (&TilePos, &TileTextureIndex, &UnitId),
+        (&TilePos, &TileTextureIndex, &UnitEntityId),
         UnitSelectionLayerFilter,
     >,
     unit_query: Query<(Entity, &TilePos, &Civilization, &UnitState), UnitFilter>,
@@ -1453,11 +1470,11 @@ fn cycle_ready_unit(
     let active_unit_selection =
         unit_selection_tile_query
             .iter()
-            .find(|(_tile_pos, &tile_texture, _unit_id)| {
+            .find(|(_tile_pos, &tile_texture, _unit_entity_id)| {
                 matches!(tile_texture, TileTextureIndex(t) if t == u32::from(UnitSelection::Active))
             });
 
-    if let Some((_active_unit_tile_pos, _tile_texture, UnitId(active_unit_entity))) =
+    if let Some((_active_unit_tile_pos, _tile_texture, UnitEntityId(active_unit_entity))) =
         active_unit_selection
     {
         // Select the previous / next ready unit.
@@ -1543,7 +1560,7 @@ fn focus_camera_on_active_unit(
 fn mark_active_unit_out_of_orders(
     unit_state_tilemap_query: Query<(&TileStorage,), UnitStateLayerFilter>,
     unit_selection_tile_query: Query<
-        (&TilePos, &TileTextureIndex, &UnitId),
+        (&TilePos, &TileTextureIndex, &UnitEntityId),
         UnitSelectionLayerFilter,
     >,
     mut unit_state_tile_query: Query<(&mut TileTextureIndex,), UnitStateLayerFilter>,
@@ -1554,10 +1571,10 @@ fn mark_active_unit_out_of_orders(
     let active_unit_selection =
         unit_selection_tile_query
             .iter()
-            .find(|(_tile_pos, &tile_texture, _unit_id)| {
+            .find(|(_tile_pos, &tile_texture, _unit_entity_id)| {
                 matches!(tile_texture, TileTextureIndex(t) if t == u32::from(UnitSelection::Active))
             });
-    let Some((active_unit_tile_pos, _tile_texture, &UnitId(active_unit_entity))) =
+    let Some((active_unit_tile_pos, _tile_texture, &UnitEntityId(active_unit_entity))) =
         active_unit_selection
     else {
         // No active unit selection.
@@ -1594,7 +1611,7 @@ fn mark_active_unit_fortified(
     unit_state_tilemap_query: Query<(&TileStorage,), UnitStateLayerFilter>,
     land_military_unit_tilemap_query: Query<(&TileStorage,), LandMilitaryUnitLayerFilter>,
     unit_selection_tile_query: Query<
-        (&TilePos, &TileTextureIndex, &UnitId),
+        (&TilePos, &TileTextureIndex, &UnitEntityId),
         UnitSelectionLayerFilter,
     >,
     mut unit_state_tile_query: Query<(&mut TileTextureIndex,), UnitStateLayerFilter>,
@@ -1606,10 +1623,10 @@ fn mark_active_unit_fortified(
     let active_unit_selection =
         unit_selection_tile_query
             .iter()
-            .find(|(_tile_pos, &tile_texture, _unit_id)| {
+            .find(|(_tile_pos, &tile_texture, _unit_entity_id)| {
                 matches!(tile_texture, TileTextureIndex(t) if t == u32::from(UnitSelection::Active))
             });
-    let Some((active_unit_tile_pos, _tile_texture, &UnitId(active_unit_entity))) =
+    let Some((active_unit_tile_pos, _tile_texture, &UnitEntityId(active_unit_entity))) =
         active_unit_selection
     else {
         // No active unit selection.
@@ -1695,10 +1712,10 @@ fn select_unit(
     player_query: Query<(&Civilization,), With<Player>>,
     unit_state_tilemap_query: Query<(&TileStorage,), UnitStateLayerFilter>,
     unit_selection_tile_query: Query<
-        (&TilePos, &TileTextureIndex, &UnitId),
+        (&TilePos, &TileTextureIndex, &UnitEntityId),
         UnitSelectionLayerFilter,
     >,
-    unit_state_tile_query: Query<(&UnitId,), UnitStateLayerFilter>,
+    unit_state_tile_query: Query<(&UnitEntityId,), UnitStateLayerFilter>,
     unit_query: Query<(Entity, &TilePos, &Civilization), UnitFilter>,
     mut unit_selected_events: EventWriter<UnitSelected>,
 ) {
@@ -1724,13 +1741,13 @@ fn select_unit(
     let active_unit_selection =
         unit_selection_tile_query
             .iter()
-            .find(|(_tile_pos, &tile_texture, _unit_id)| {
+            .find(|(_tile_pos, &tile_texture, _unit_entity_id)| {
                 matches!(tile_texture, TileTextureIndex(t) if t == u32::from(UnitSelection::Active))
             });
 
-    if let Some((active_unit_tile_pos, _tile_texture, UnitId(active_unit_entity))) =
+    if let Some((active_unit_tile_pos, _tile_texture, UnitEntityId(active_unit_entity))) =
         active_unit_selection
-            .filter(|(&tile_pos, _tile_texture, _unit_id)| tile_pos == cursor_tile_pos.0)
+            .filter(|(&tile_pos, _tile_texture, _unit_entity_id)| tile_pos == cursor_tile_pos.0)
     {
         // Select the next unit at the same tile position as the active unit.
         // This allows cycling through stacked units.
@@ -1761,7 +1778,7 @@ fn select_unit(
         let tile_entity = unit_state_tile_storage
             .get(&cursor_tile_pos.0)
             .expect("tile position with units should have unit state tile");
-        let (&UnitId(unit_entity),) = unit_state_tile_query.get(tile_entity).unwrap();
+        let (&UnitEntityId(unit_entity),) = unit_state_tile_query.get(tile_entity).unwrap();
 
         unit_selected_events.send(UnitSelected {
             entity: unit_entity,
@@ -1796,6 +1813,7 @@ fn should_move_active_unit_to(
 #[allow(clippy::too_many_arguments)]
 fn move_active_unit_to(
     cursor_tile_pos: Res<CursorTilePos>,
+    multiplayer_state: Res<State<MultiplayerState>>,
     base_terrain_tilemap_query: Query<(&TilemapSize, &TileStorage), BaseTerrainLayerFilter>,
     river_tilemap_query: Query<(&TileStorage,), RiverLayerFilter>,
     terrain_features_tilemap_query: Query<(&TileStorage,), TerrainFeaturesLayerFilter>,
@@ -1804,9 +1822,9 @@ fn move_active_unit_to(
     river_tile_query: Query<(&TileTextureIndex,), RiverLayerFilter>,
     terrain_features_tile_query: Query<(&TileTextureIndex,), TerrainFeaturesLayerFilter>,
     unit_selection_tile_query: Query<(&TilePos, &TileTextureIndex), UnitSelectionLayerFilter>,
-    unit_state_tile_query: Query<(&UnitId,), UnitStateLayerFilter>,
-    unit_query: Query<(&NetworkId, &MovementPoints, &FullMovementPoints), UnitFilter>,
-    mut host_broadcast_events: EventWriter<HostBroadcast>,
+    unit_state_tile_query: Query<(&UnitEntityId,), UnitStateLayerFilter>,
+    unit_query: Query<(&UnitId, &MovementPoints, &FullMovementPoints), UnitFilter>,
+    mut request_events: EventWriter<Request>,
     mut unit_moved_events: EventWriter<UnitMoved>,
 ) {
     let (map_size, base_terrain_tile_storage) = base_terrain_tilemap_query.get_single().unwrap();
@@ -1827,12 +1845,11 @@ fn move_active_unit_to(
         .expect("there should be an active unit selection");
     let start = active_unit_selection_pos;
     let goal = cursor_tile_pos.0;
-    let (&UnitId(unit_entity),) = unit_state_tile_storage
+    let (&UnitEntityId(unit_entity),) = unit_state_tile_storage
         .get(&start)
         .map(|tile_entity| unit_state_tile_query.get(tile_entity).unwrap())
         .expect("active unit tile position should have unit state tile");
-    let (unit_network_id, movement_points, full_movement_points) =
-        unit_query.get(unit_entity).unwrap();
+    let (&unit_id, movement_points, full_movement_points) = unit_query.get(unit_entity).unwrap();
 
     let successors = |(x, y)| {
         let tile_pos = TilePos { x, y };
@@ -1959,13 +1976,22 @@ fn move_active_unit_to(
                 TilePos { x, y }
             };
             let unit_moved = UnitMoved {
-                network_id: *unit_network_id,
+                unit_id,
                 from_pos: current,
                 to_pos: next,
                 movement_cost,
             };
-            host_broadcast_events.send(unit_moved.into());
-            unit_moved_events.send(unit_moved);
+            match multiplayer_state.get() {
+                MultiplayerState::Hosting => {
+                    unit_moved_events.send(unit_moved);
+                },
+                MultiplayerState::Joining => {
+                    request_events.send(unit_moved.into());
+                },
+                _ => {
+                    unreachable!("multiplayer state should not be inactive");
+                },
+            }
             current = next;
         } else {
             info!(?current, ?start, ?goal, "could not find path");

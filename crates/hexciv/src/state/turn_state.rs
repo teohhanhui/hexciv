@@ -4,5 +4,5 @@ use bevy::prelude::*;
 pub enum TurnState {
     #[default]
     Processing,
-    Playing,
+    InProgress,
 }
