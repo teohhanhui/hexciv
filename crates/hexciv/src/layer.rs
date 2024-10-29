@@ -1,5 +1,5 @@
-use bevy::ecs::component::Component;
-use bevy::ecs::query::{Or, QueryFilter, With, Without};
+use bevy::ecs::query::QueryFilter;
+use bevy::prelude::*;
 
 #[derive(Component)]
 pub struct BaseTerrainLayer;
@@ -108,3 +108,35 @@ pub struct UnitLayersFilter(
     Without<UnitSelectionLayer>,
     Without<UnitStateLayer>,
 );
+
+pub trait LayerZIndex {
+    const Z_INDEX: f32;
+}
+
+impl LayerZIndex for BaseTerrainLayer {
+    const Z_INDEX: f32 = 0.0;
+}
+
+impl LayerZIndex for RiverLayer {
+    const Z_INDEX: f32 = 1.0;
+}
+
+impl LayerZIndex for TerrainFeaturesLayer {
+    const Z_INDEX: f32 = 2.0;
+}
+
+impl LayerZIndex for UnitSelectionLayer {
+    const Z_INDEX: f32 = 4.0;
+}
+
+impl LayerZIndex for UnitStateLayer {
+    const Z_INDEX: f32 = 5.0;
+}
+
+impl LayerZIndex for CivilianUnitLayer {
+    const Z_INDEX: f32 = 6.0;
+}
+
+impl LayerZIndex for LandMilitaryUnitLayer {
+    const Z_INDEX: f32 = 6.0;
+}

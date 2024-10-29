@@ -9,6 +9,9 @@ pub struct TurnStarted {
     pub turn_num: u16,
 }
 
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, SystemSet)]
+pub struct TurnInProgressSet;
+
 /// Handles [`TurnStarted`] events.
 pub fn handle_turn_started(
     multiplayer_state: Res<State<MultiplayerState>>,
