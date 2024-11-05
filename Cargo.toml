@@ -41,7 +41,7 @@ uuid = { version = "1.11.0", default-features = false }
 arithmetic_side_effects = "warn"
 
 [patch.crates-io]
-bevy_ecs_tilemap = { git = "https://github.com/teohhanhui/bevy_ecs_tilemap", branch = "workaround/wgpu-gles-texture-type-inference" }
+bevy_ecs_tilemap = { git = "https://github.com/StarArawn/bevy_ecs_tilemap", branch = "main" }
 
 # Enable a small amount of optimization in the dev profile.
 [profile.dev]
