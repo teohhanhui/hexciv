@@ -105,6 +105,7 @@ const TROPICS_TERRAIN_CHOICES: [BaseTerrain; 7] = [
     BaseTerrain::Desert,
 ];
 
+const WOODS_CHOICES: [bool; 5] = [true, false, false, false, false];
 const OASIS_CHOICES: [bool; 5] = [true, false, false, false, false];
 const ICE_CHOICES: [bool; 4] = [true, true, true, false];
 
@@ -421,8 +422,7 @@ pub fn spawn_tilemap(
     // Spawn terrain features layer.
 
     let terrain_features_image_handles = vec![
-        // TODO: woods
-        asset_server.load("tiles/transparent.png"),
+        asset_server.load("tiles/woods.png"),
         // TODO: rainforest
         asset_server.load("tiles/transparent.png"),
         // TODO: marsh
@@ -620,6 +620,29 @@ pub fn post_spawn_tilemap(
             {
                 let (mut tile_texture,) = base_terrain_tile_query.get_mut(tile_entity).unwrap();
                 tile_texture.0 = BaseTerrain::Coast.into();
+            }
+
+            if [
+                BaseTerrain::Plains.into(),
+                BaseTerrain::PlainsHills.into(),
+                BaseTerrain::Grassland.into(),
+                BaseTerrain::GrasslandHills.into(),
+                BaseTerrain::Tundra.into(),
+                BaseTerrain::TundraHills.into(),
+            ]
+            .contains(&tile_texture.0)
+                && rng.choice(WOODS_CHOICES).unwrap()
+            {
+                let tile_entity = commands
+                    .spawn(TileBundle {
+                        position: tile_pos,
+                        tilemap_id: TilemapId(terrain_features_tilemap_entity),
+                        texture_index: TileTextureIndex(TerrainFeatures::Woods.into()),
+                        ..Default::default()
+                    })
+                    .insert(TerrainFeaturesLayer)
+                    .id();
+                terrain_features_tile_storage.set(&tile_pos, tile_entity);
             }
 
             if matches!(tile_texture, TileTextureIndex(t) if t == u32::from(BaseTerrain::Desert))
