@@ -106,6 +106,11 @@ const TROPICS_TERRAIN_CHOICES: [BaseTerrain; 7] = [
 ];
 
 const WOODS_CHOICES: [bool; 5] = [true, false, false, false, false];
+const TEMPERATE_RAINFOREST_CHOICES: [bool; 5] = [true, false, false, false, false];
+const SUBTROPICAL_RAINFOREST_CHOICES: [bool; 10] = [
+    true, false, false, false, false, false, false, false, false, false,
+];
+const TROPICAL_RAINFOREST_CHOICES: [bool; 3] = [true, false, false];
 const OASIS_CHOICES: [bool; 5] = [true, false, false, false, false];
 const ICE_CHOICES: [bool; 4] = [true, true, true, false];
 
@@ -423,8 +428,7 @@ pub fn spawn_tilemap(
 
     let terrain_features_image_handles = vec![
         asset_server.load("tiles/woods.png"),
-        // TODO: rainforest
-        asset_server.load("tiles/transparent.png"),
+        asset_server.load("tiles/rainforest.png"),
         // TODO: marsh
         asset_server.load("tiles/transparent.png"),
         // TODO: floodplains
@@ -611,6 +615,10 @@ pub fn post_spawn_tilemap(
                 HexNeighbors::get_neighboring_positions_row_odd(&tile_pos, map_size);
             let neighbor_entities = neighbor_positions.entities(base_terrain_tile_storage);
 
+            let latitude = NotNan::new(-90.0).unwrap()
+                + NotNan::new(180.0).unwrap()
+                    * ((NotNan::from(tile_pos.y) + 0.5) / NotNan::from(map_size.y));
+
             if matches!(tile_texture, TileTextureIndex(t) if t == u32::from(BaseTerrain::Ocean))
                 && neighbor_entities.iter().any(|neighbor_entity| {
                     let (tile_texture,) = base_terrain_tile_query.get(*neighbor_entity).unwrap();
@@ -643,6 +651,34 @@ pub fn post_spawn_tilemap(
                     .insert(TerrainFeaturesLayer)
                     .id();
                 terrain_features_tile_storage.set(&tile_pos, tile_entity);
+            } else if [BaseTerrain::Plains.into(), BaseTerrain::PlainsHills.into()]
+                .contains(&tile_texture.0)
+                && {
+                    if *latitude >= EarthLatitude::ArticCirle.latitude()
+                        || *latitude <= EarthLatitude::AntarcticCircle.latitude()
+                    {
+                        false
+                    } else if *latitude >= 35.0 || *latitude <= -35.0 {
+                        rng.choice(TEMPERATE_RAINFOREST_CHOICES).unwrap()
+                    } else if *latitude >= EarthLatitude::TropicOfCancer.latitude()
+                        || *latitude <= EarthLatitude::TropicOfCapricorn.latitude()
+                    {
+                        rng.choice(SUBTROPICAL_RAINFOREST_CHOICES).unwrap()
+                    } else {
+                        rng.choice(TROPICAL_RAINFOREST_CHOICES).unwrap()
+                    }
+                }
+            {
+                let tile_entity = commands
+                    .spawn(TileBundle {
+                        position: tile_pos,
+                        tilemap_id: TilemapId(terrain_features_tilemap_entity),
+                        texture_index: TileTextureIndex(TerrainFeatures::Rainforest.into()),
+                        ..Default::default()
+                    })
+                    .insert(TerrainFeaturesLayer)
+                    .id();
+                terrain_features_tile_storage.set(&tile_pos, tile_entity);
             }
 
             if matches!(tile_texture, TileTextureIndex(t) if t == u32::from(BaseTerrain::Desert))
@@ -660,26 +696,21 @@ pub fn post_spawn_tilemap(
                 terrain_features_tile_storage.set(&tile_pos, tile_entity);
             }
 
-            if [BaseTerrain::Ocean.into(), BaseTerrain::Coast.into()].contains(&tile_texture.0) {
-                let latitude = NotNan::new(-90.0).unwrap()
-                    + NotNan::new(180.0).unwrap()
-                        * ((NotNan::from(tile_pos.y) + 0.5) / NotNan::from(map_size.y));
-
-                if (*latitude >= EarthLatitude::ArticCirle.latitude()
+            if [BaseTerrain::Ocean.into(), BaseTerrain::Coast.into()].contains(&tile_texture.0)
+                && (*latitude >= EarthLatitude::ArticCirle.latitude()
                     || *latitude <= EarthLatitude::AntarcticCircle.latitude())
-                    && rng.choice(ICE_CHOICES).unwrap()
-                {
-                    let tile_entity = commands
-                        .spawn(TileBundle {
-                            position: tile_pos,
-                            tilemap_id: TilemapId(terrain_features_tilemap_entity),
-                            texture_index: TileTextureIndex(TerrainFeatures::Ice.into()),
-                            ..Default::default()
-                        })
-                        .insert(TerrainFeaturesLayer)
-                        .id();
-                    terrain_features_tile_storage.set(&tile_pos, tile_entity);
-                }
+                && rng.choice(ICE_CHOICES).unwrap()
+            {
+                let tile_entity = commands
+                    .spawn(TileBundle {
+                        position: tile_pos,
+                        tilemap_id: TilemapId(terrain_features_tilemap_entity),
+                        texture_index: TileTextureIndex(TerrainFeatures::Ice.into()),
+                        ..Default::default()
+                    })
+                    .insert(TerrainFeaturesLayer)
+                    .id();
+                terrain_features_tile_storage.set(&tile_pos, tile_entity);
             }
 
             if ![
