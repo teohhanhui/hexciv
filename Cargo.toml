@@ -17,6 +17,7 @@ bevy_ecs_tilemap = { version = "0.14.0", default-features = false }
 bevy_matchbox = { version = "0.10.0", default-features = false }
 bevy_pancam = { version = "0.14.0", default-features = false }
 bitvec = { version = "1.0.1", default-features = false }
+bon = { version = "3.0.0", default-features = false }
 derive_more = { version = "1.0.0", default-features = false }
 fastlem = { version = "0.1.4", default-features = false }
 fastlem-random-terrain = { path = "crates/fastlem-random-terrain", default-features = false }

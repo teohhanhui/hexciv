@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bon::bon;
 use strum::VariantArray as _;
 
 use crate::civilization::Civilization;
@@ -29,13 +30,21 @@ pub struct PlayerBundle {
     pub player_state: PlayerState,
 }
 
+#[bon]
 impl PlayerBundle {
-    pub fn new(player_index: PlayerIndex, civ: Civilization) -> Self {
+    #[builder]
+    pub fn new(
+        player_index: PlayerIndex,
+        player_state: Option<PlayerState>,
+        civ: Civilization,
+    ) -> Self {
+        let player_state = player_state.unwrap_or_default();
+
         Self {
             player: Player,
             player_index,
             civ,
-            player_state: PlayerState::default(),
+            player_state,
         }
     }
 }
@@ -50,11 +59,12 @@ pub fn spawn_players(
 
     let civs = rng.choose_multiple(Civilization::VARIANTS.iter(), num_players.0.into());
 
-    commands.spawn_batch(
-        civs.into_iter()
-            .enumerate()
-            .map(|(i, &civ)| PlayerBundle::new(PlayerIndex(u8::try_from(i).unwrap()), civ)),
-    );
+    commands.spawn_batch(civs.into_iter().enumerate().map(|(i, &civ)| {
+        PlayerBundle::builder()
+            .player_index(PlayerIndex(u8::try_from(i).unwrap()))
+            .civ(civ)
+            .build()
+    }));
 }
 
 pub fn init_our_player(

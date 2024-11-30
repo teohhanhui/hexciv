@@ -4,6 +4,7 @@ use std::iter;
 use bevy::prelude::*;
 use bevy_matchbox::prelude as matchbox;
 use bevy_matchbox::prelude::*;
+use bon::bon;
 use serde::{Deserialize, Serialize};
 
 use crate::game_setup::{GameRng, GameSetup, MapRng, NumPlayers};
@@ -68,7 +69,9 @@ impl From<matchbox::PeerId> for PeerId {
     }
 }
 
+#[bon]
 impl PeerBundle {
+    #[builder]
     pub fn new(peer_id: PeerId, player_index: PlayerIndex) -> Self {
         Self {
             peer: Peer,
@@ -394,10 +397,10 @@ pub fn handle_peer_connected(
         if !updated {
             new_peer_bundles.insert(
                 PlayerIndex(connected_player_index),
-                PeerBundle::new(
-                    PeerId(connected_peer_id),
-                    PlayerIndex(connected_player_index),
-                ),
+                PeerBundle::builder()
+                    .peer_id(connected_peer_id.into())
+                    .player_index(PlayerIndex(connected_player_index))
+                    .build(),
             );
         }
 

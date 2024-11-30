@@ -15,6 +15,7 @@ bevy_ecs_tilemap = { workspace = true, features = ["render", "serde"] }
 bevy_matchbox = { workspace = true, features = [] }
 bevy_pancam = { workspace = true, features = [] }
 bitvec = { workspace = true, features = ["std"] }
+bon = { workspace = true, features = ["std"] }
 derive_more = { workspace = true, features = ["display", "std"] }
 fastlem-random-terrain = { workspace = true, features = [] }
 fastrand = { workspace = true, features = ["js", "std"] }

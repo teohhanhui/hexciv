@@ -10,6 +10,7 @@ use bevy_ecs_tilemap::helpers::hex_grid::cube::CubePos;
 use bevy_ecs_tilemap::helpers::hex_grid::neighbors::{HexNeighbors, HEX_DIRECTIONS};
 use bevy_ecs_tilemap::prelude::*;
 use bitvec::prelude::*;
+use bon::{bon, Builder};
 use derive_more::Display;
 use indexmap::IndexSet;
 use itertools::Itertools as _;
@@ -124,7 +125,7 @@ pub struct UnitEntityId(pub Entity);
 #[derive(Component)]
 pub struct ActionsLegend;
 
-#[derive(Bundle)]
+#[derive(Builder, Bundle)]
 pub struct UnitBundle {
     pub unit_id: UnitId,
     pub position: TilePos,
@@ -231,7 +232,7 @@ impl From<LandMilitaryUnit> for UnitType {
 }
 
 impl CivilianUnit {
-    fn movement_points(&self) -> u32 {
+    const fn movement_points(&self) -> u32 {
         match self {
             Self::Settler => 2,
         }
@@ -239,7 +240,7 @@ impl CivilianUnit {
 }
 
 impl LandMilitaryUnit {
-    fn movement_points(&self) -> u32 {
+    const fn movement_points(&self) -> u32 {
         match self {
             Self::Warrior => 2,
         }
@@ -268,29 +269,9 @@ impl Add<UnitStateModifier> for UnitState {
     }
 }
 
-impl UnitBundle {
-    fn new(
-        unit_id: UnitId,
-        position: TilePos,
-        unit_type: UnitType,
-        civ: Civilization,
-        movement_points: MovementPoints,
-        full_movement_points: FullMovementPoints,
-        unit_state: UnitState,
-    ) -> Self {
-        Self {
-            unit_id,
-            position,
-            unit_type,
-            civ,
-            movement_points,
-            full_movement_points,
-            unit_state,
-        }
-    }
-}
-
+#[bon]
 impl CivilianUnitBundle {
+    #[builder]
     pub fn new(
         unit_id: UnitId,
         position: TilePos,
@@ -307,20 +288,22 @@ impl CivilianUnitBundle {
         let unit_state = UnitState::CivilianReady;
 
         Self {
-            unit_bundle: UnitBundle::new(
-                unit_id,
-                position,
-                UnitType::Civilian(civilian_unit),
-                civ,
-                movement_points,
-                full_movement_points,
-                unit_state,
-            ),
+            unit_bundle: UnitBundle::builder()
+                .unit_id(unit_id)
+                .position(position)
+                .unit_type(civilian_unit.into())
+                .civ(civ)
+                .movement_points(movement_points)
+                .full_movement_points(full_movement_points)
+                .unit_state(unit_state)
+                .build(),
         }
     }
 }
 
+#[bon]
 impl LandMilitaryUnitBundle {
+    #[builder]
     pub fn new(
         unit_id: UnitId,
         position: TilePos,
@@ -337,24 +320,26 @@ impl LandMilitaryUnitBundle {
         let unit_state = UnitState::LandMilitaryReady;
 
         Self {
-            unit_bundle: UnitBundle::new(
-                unit_id,
-                position,
-                UnitType::LandMilitary(land_military_unit),
-                civ,
-                movement_points,
-                full_movement_points,
-                unit_state,
-            ),
+            unit_bundle: UnitBundle::builder()
+                .unit_id(unit_id)
+                .position(position)
+                .unit_type(land_military_unit.into())
+                .civ(civ)
+                .movement_points(movement_points)
+                .full_movement_points(full_movement_points)
+                .unit_state(unit_state)
+                .build(),
         }
     }
 }
 
+#[bon]
 impl UnitSelectionTileBundle {
-    pub fn new(tile_pos: TilePos, tilemap_id: TilemapId, unit_entity_id: UnitEntityId) -> Self {
+    #[builder]
+    pub fn new(position: TilePos, tilemap_id: TilemapId, unit_entity_id: UnitEntityId) -> Self {
         Self {
             tile_bundle: TileBundle {
-                position: tile_pos,
+                position,
                 tilemap_id,
                 texture_index: TileTextureIndex(UnitSelection::Active.into()),
                 ..Default::default()
@@ -365,22 +350,25 @@ impl UnitSelectionTileBundle {
     }
 }
 
+#[bon]
 impl UnitStateTileBundle {
+    #[builder]
     pub fn new(
-        tile_pos: TilePos,
+        position: TilePos,
         unit_type: UnitType,
+        unit_state: Option<UnitState>,
         civ: Civilization,
         tilemap_id: TilemapId,
         unit_entity_id: UnitEntityId,
     ) -> Self {
-        let unit_state = match unit_type {
+        let unit_state = unit_state.unwrap_or(match unit_type {
             UnitType::Civilian(_civilian_unit) => UnitState::CivilianReady,
             UnitType::LandMilitary(_land_military_unit) => UnitState::LandMilitaryReady,
-        };
+        });
 
         Self {
             tile_bundle: TileBundle {
-                position: tile_pos,
+                position,
                 tilemap_id,
                 texture_index: TileTextureIndex(unit_state.into()),
                 color: TileColor(civ.colors()[0].into()),
@@ -392,9 +380,11 @@ impl UnitStateTileBundle {
     }
 }
 
+#[bon]
 impl CivilianUnitTileBundle {
+    #[builder]
     pub fn new(
-        tile_pos: TilePos,
+        position: TilePos,
         civilian_unit: CivilianUnit,
         civ: Civilization,
         tilemap_id: TilemapId,
@@ -402,7 +392,7 @@ impl CivilianUnitTileBundle {
     ) -> Self {
         Self {
             tile_bundle: TileBundle {
-                position: tile_pos,
+                position,
                 tilemap_id,
                 texture_index: TileTextureIndex(civilian_unit.into()),
                 color: TileColor(civ.colors()[1].into()),
@@ -414,9 +404,11 @@ impl CivilianUnitTileBundle {
     }
 }
 
+#[bon]
 impl LandMilitaryUnitTileBundle {
+    #[builder]
     pub fn new(
-        tile_pos: TilePos,
+        position: TilePos,
         land_military_unit: LandMilitaryUnit,
         civ: Civilization,
         tilemap_id: TilemapId,
@@ -424,7 +416,7 @@ impl LandMilitaryUnitTileBundle {
     ) -> Self {
         Self {
             tile_bundle: TileBundle {
-                position: tile_pos,
+                position,
                 tilemap_id,
                 texture_index: TileTextureIndex(land_military_unit.into()),
                 color: TileColor(civ.colors()[1].into()),
@@ -1102,63 +1094,75 @@ pub fn handle_unit_spawned(
         match unit_type {
             UnitType::Civilian(civilian_unit) => {
                 let unit_entity = commands
-                    .spawn(CivilianUnitBundle::new(
-                        unit_id,
-                        position,
-                        civ,
-                        civilian_unit,
-                    ))
+                    .spawn(
+                        CivilianUnitBundle::builder()
+                            .unit_id(unit_id)
+                            .position(position)
+                            .civ(civ)
+                            .civilian_unit(civilian_unit)
+                            .build(),
+                    )
                     .id();
                 unit_entity_map.0.insert(unit_id, unit_entity);
                 let tile_entity = commands
-                    .spawn(CivilianUnitTileBundle::new(
-                        position,
-                        civilian_unit,
-                        civ,
-                        TilemapId(civilian_unit_tilemap_entity),
-                        UnitEntityId(unit_entity),
-                    ))
+                    .spawn(
+                        CivilianUnitTileBundle::builder()
+                            .position(position)
+                            .civilian_unit(civilian_unit)
+                            .civ(civ)
+                            .tilemap_id(TilemapId(civilian_unit_tilemap_entity))
+                            .unit_entity_id(UnitEntityId(unit_entity))
+                            .build(),
+                    )
                     .id();
                 civilian_unit_tile_storage.set(&position, tile_entity);
                 let tile_entity = commands
-                    .spawn(UnitStateTileBundle::new(
-                        position,
-                        civilian_unit.into(),
-                        civ,
-                        TilemapId(unit_state_tilemap_entity),
-                        UnitEntityId(unit_entity),
-                    ))
+                    .spawn(
+                        UnitStateTileBundle::builder()
+                            .position(position)
+                            .unit_type(civilian_unit.into())
+                            .civ(civ)
+                            .tilemap_id(TilemapId(unit_state_tilemap_entity))
+                            .unit_entity_id(UnitEntityId(unit_entity))
+                            .build(),
+                    )
                     .id();
                 unit_state_tile_storage.set(&position, tile_entity);
             },
             UnitType::LandMilitary(land_military_unit) => {
                 let unit_entity = commands
-                    .spawn(LandMilitaryUnitBundle::new(
-                        unit_id,
-                        position,
-                        civ,
-                        land_military_unit,
-                    ))
+                    .spawn(
+                        LandMilitaryUnitBundle::builder()
+                            .unit_id(unit_id)
+                            .position(position)
+                            .civ(civ)
+                            .land_military_unit(land_military_unit)
+                            .build(),
+                    )
                     .id();
                 unit_entity_map.0.insert(unit_id, unit_entity);
                 let tile_entity = commands
-                    .spawn(LandMilitaryUnitTileBundle::new(
-                        position,
-                        land_military_unit,
-                        civ,
-                        TilemapId(land_military_unit_tilemap_entity),
-                        UnitEntityId(unit_entity),
-                    ))
+                    .spawn(
+                        LandMilitaryUnitTileBundle::builder()
+                            .position(position)
+                            .land_military_unit(land_military_unit)
+                            .civ(civ)
+                            .tilemap_id(TilemapId(land_military_unit_tilemap_entity))
+                            .unit_entity_id(UnitEntityId(unit_entity))
+                            .build(),
+                    )
                     .id();
                 land_military_unit_tile_storage.set(&position, tile_entity);
                 let tile_entity = commands
-                    .spawn(UnitStateTileBundle::new(
-                        position,
-                        land_military_unit.into(),
-                        civ,
-                        TilemapId(unit_state_tilemap_entity),
-                        UnitEntityId(unit_entity),
-                    ))
+                    .spawn(
+                        UnitStateTileBundle::builder()
+                            .position(position)
+                            .unit_type(land_military_unit.into())
+                            .civ(civ)
+                            .tilemap_id(TilemapId(unit_state_tilemap_entity))
+                            .unit_entity_id(UnitEntityId(unit_entity))
+                            .build(),
+                    )
                     .id();
                 unit_state_tile_storage.set(&position, tile_entity);
             },
@@ -1235,11 +1239,13 @@ pub fn handle_unit_selected(
             // We need to spawn a new unit selection tile, since there was no currently
             // active unit.
 
-            new_unit_selection_tile_bundle = Some(UnitSelectionTileBundle::new(
-                selected_unit_tile_pos,
-                TilemapId(unit_selection_tilemap_entity),
-                UnitEntityId(selected_unit_entity),
-            ));
+            new_unit_selection_tile_bundle = Some(
+                UnitSelectionTileBundle::builder()
+                    .position(selected_unit_tile_pos)
+                    .tilemap_id(TilemapId(unit_selection_tilemap_entity))
+                    .unit_entity_id(UnitEntityId(selected_unit_entity))
+                    .build(),
+            );
         }
 
         // Update unit state tile.
@@ -1507,16 +1513,17 @@ pub fn handle_unit_moved(
                         tile_texture.set_if_neq(TileTextureIndex((*unit_state).into()));
                         *unit_entity_id = UnitEntityId(unit_entity);
                     } else {
-                        let mut unit_state_tile_bundle = UnitStateTileBundle::new(
+                        new_unit_state_tile_bundles.insert(
                             tile_pos,
-                            UnitType::Civilian(civilian_unit),
-                            *civ,
-                            TilemapId(unit_state_tilemap_entity),
-                            UnitEntityId(unit_entity),
+                            UnitStateTileBundle::builder()
+                                .position(tile_pos)
+                                .unit_type(civilian_unit.into())
+                                .unit_state(*unit_state)
+                                .civ(*civ)
+                                .tilemap_id(TilemapId(unit_state_tilemap_entity))
+                                .unit_entity_id(UnitEntityId(unit_entity))
+                                .build(),
                         );
-                        unit_state_tile_bundle.tile_bundle.texture_index =
-                            TileTextureIndex((*unit_state).into());
-                        new_unit_state_tile_bundles.insert(tile_pos, unit_state_tile_bundle);
                     }
                 },
                 UnitType::LandMilitary(land_military_unit) => {
@@ -1542,16 +1549,17 @@ pub fn handle_unit_moved(
                         tile_texture.set_if_neq(TileTextureIndex((*unit_state).into()));
                         *unit_entity_id = UnitEntityId(unit_entity);
                     } else {
-                        let mut unit_state_tile_bundle = UnitStateTileBundle::new(
+                        new_unit_state_tile_bundles.insert(
                             tile_pos,
-                            UnitType::LandMilitary(land_military_unit),
-                            *civ,
-                            TilemapId(unit_state_tilemap_entity),
-                            UnitEntityId(unit_entity),
+                            UnitStateTileBundle::builder()
+                                .position(tile_pos)
+                                .unit_type(land_military_unit.into())
+                                .unit_state(*unit_state)
+                                .civ(*civ)
+                                .tilemap_id(TilemapId(unit_state_tilemap_entity))
+                                .unit_entity_id(UnitEntityId(unit_entity))
+                                .build(),
                         );
-                        unit_state_tile_bundle.tile_bundle.texture_index =
-                            TileTextureIndex((*unit_state).into());
-                        new_unit_state_tile_bundles.insert(tile_pos, unit_state_tile_bundle);
                     }
                 },
             }
@@ -1626,13 +1634,15 @@ fn update_civilian_unit_tile(
     } else {
         new_unit_tile_bundles.insert(
             *tile_pos,
-            UnitTileBundle::Civilian(CivilianUnitTileBundle::new(
-                *tile_pos,
-                civilian_unit,
-                civ,
-                civilian_unit_tilemap_id,
-                civilian_unit_entity_id,
-            )),
+            UnitTileBundle::Civilian(
+                CivilianUnitTileBundle::builder()
+                    .position(*tile_pos)
+                    .civilian_unit(civilian_unit)
+                    .civ(civ)
+                    .tilemap_id(civilian_unit_tilemap_id)
+                    .unit_entity_id(civilian_unit_entity_id)
+                    .build(),
+            ),
         );
     }
 }
@@ -1655,13 +1665,15 @@ fn update_land_military_unit_tile(
     } else {
         new_unit_tile_bundles.insert(
             *tile_pos,
-            UnitTileBundle::LandMilitary(LandMilitaryUnitTileBundle::new(
-                *tile_pos,
-                land_military_unit,
-                civ,
-                land_military_unit_tilemap_id,
-                land_military_unit_entity_id,
-            )),
+            UnitTileBundle::LandMilitary(
+                LandMilitaryUnitTileBundle::builder()
+                    .position(*tile_pos)
+                    .land_military_unit(land_military_unit)
+                    .civ(civ)
+                    .tilemap_id(land_military_unit_tilemap_id)
+                    .unit_entity_id(land_military_unit_entity_id)
+                    .build(),
+            ),
         );
     }
 }
