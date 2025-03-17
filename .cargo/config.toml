@@ -3,11 +3,11 @@ BEVY_ASSET_ROOT = { value = "assets", relative = true }
 
 [target.x86_64-unknown-linux-gnu]
 rustflags = ["-C", "link-arg=-fuse-ld=lld"]
-# rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+# rustflags = ["-C", "link-arg=-fuse-ld=mold", "-C", "link-arg=-Wl,--compress-debug-sections=zstd"]
 
 [target.aarch64-unknown-linux-gnu]
 rustflags = ["-C", "link-arg=-fuse-ld=lld"]
-# rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+# rustflags = ["-C", "link-arg=-fuse-ld=mold", "-C", "link-arg=-Wl,--compress-debug-sections=zstd"]
 
 [target.x86_64-pc-windows-msvc]
 linker = "rust-lld.exe"
