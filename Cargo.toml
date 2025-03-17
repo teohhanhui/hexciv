@@ -13,6 +13,7 @@ license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 bevy = { version = "0.14.2", default-features = false }
+bevy_cosmic_edit = { version = "0.25.0", default-features = false }
 bevy_ecs_tilemap = { version = "0.14.0", default-features = false }
 bevy_matchbox = { version = "0.10.0", default-features = false }
 bevy_pancam = { version = "0.14.0", default-features = false }
@@ -42,7 +43,7 @@ uuid = { version = "1.11.0", default-features = false }
 arithmetic_side_effects = "warn"
 
 [patch.crates-io]
-bevy_ecs_tilemap = { git = "https://github.com/StarArawn/bevy_ecs_tilemap", branch = "main" }
+bevy_ecs_tilemap = { git = "https://github.com/StarArawn/bevy_ecs_tilemap", rev = "93a01d720326534115ce6173bc488be8d2742a24" }
 
 # Enable a small amount of optimization in the dev profile.
 [profile.dev]
@@ -51,6 +52,10 @@ opt-level = 1
 # Enable a large amount of optimization in the dev profile for dependencies.
 [profile.dev.package."*"]
 opt-level = 3
+
+# Remove expensive debug assertions due to <https://github.com/bevyengine/bevy/issues/14291>
+[profile.dev.package.wgpu-types]
+debug-assertions = false
 
 # Enable more optimization in the release profile at the cost of compile time.
 [profile.release]
