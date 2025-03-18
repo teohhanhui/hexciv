@@ -320,13 +320,17 @@ pub fn spawn_tilemap(
                         .map(|elevation| NotNan::new(elevation).unwrap())
                 })
                 .collect();
-            let elevation = elevations.iter().sum::<NotNan<_>>() / elevations.len() as f64;
+            let elevation = elevations.iter().sum::<NotNan<_>>()
+                / NotNan::from(
+                    u8::try_from(elevations.len()).expect("`elevations.len()` should fit in `u8`"),
+                );
             let texture_index = if elevation < NotNan::new(0.05).unwrap() {
                 TileTextureIndex(BaseTerrain::Ocean.into())
             } else {
                 let latitude = NotNan::new(-90.0).unwrap()
                     + NotNan::new(180.0).unwrap()
-                        * ((NotNan::from(tile_pos.y) + 0.5) / NotNan::from(map_size.y));
+                        * ((NotNan::from(tile_pos.y) + NotNan::new(0.5).unwrap())
+                            / NotNan::from(map_size.y));
 
                 let base_terrain = choose_base_terrain_by_latitude(rng, latitude);
 
@@ -617,7 +621,8 @@ pub fn post_spawn_tilemap(
 
             let latitude = NotNan::new(-90.0).unwrap()
                 + NotNan::new(180.0).unwrap()
-                    * ((NotNan::from(tile_pos.y) + 0.5) / NotNan::from(map_size.y));
+                    * ((NotNan::from(tile_pos.y) + NotNan::new(0.5).unwrap())
+                        / NotNan::from(map_size.y));
 
             if matches!(tile_texture, TileTextureIndex(t) if t == u32::from(BaseTerrain::Ocean))
                 && neighbor_entities.iter().any(|neighbor_entity| {

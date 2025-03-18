@@ -1416,7 +1416,7 @@ pub fn handle_unit_moved(
             ) = unit_query.get_mut(*moved_unit_entity).unwrap();
             assert!(*tile_pos == from_pos);
             *tile_pos = to_pos;
-            movement_points.0 -= *movement_cost;
+            movement_points.0 -= movement_cost;
             if movement_points.0 == 0.0 {
                 let next_unit_state = match *unit_state {
                     UnitState::CivilianReady | UnitState::CivilianReadyOutOfOrders => {

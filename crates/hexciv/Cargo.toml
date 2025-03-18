@@ -32,7 +32,7 @@ serde = { workspace = true, features = ["derive", "std"] }
 serde_json = { workspace = true, features = ["std"] }
 strum = { workspace = true, features = ["derive", "std"] }
 tracing = { workspace = true, features = ["max_level_debug", "release_max_level_warn"] }
-uuid = { workspace = true, features = ["serde", "v4"] }
+uuid = { workspace = true, features = ["rng-getrandom", "serde", "v4"] }
 
 [dependencies.bevy]
 workspace = true
@@ -54,6 +54,18 @@ features = [
     "webgl2",
     "x11",
 ]
+
+[dependencies.getrandom_v02]
+package = "getrandom"
+version = "0.2.15"
+default-features = false
+features = ["js"]
+
+[dependencies.getrandom_v03]
+package = "getrandom"
+version = "0.3.2"
+default-features = false
+features = ["wasm_js"]
 
 [features]
 default = ["dev"]
