@@ -36,7 +36,7 @@ WASM_SERVER_RUNNER_ADDRESS=0.0.0.0 cargo run --target wasm32-unknown-unknown
 
 ## Roadmap
 
-(We're targeting only the base game without expansion packs for now.)
+(We're targeting only the base game without expansion packs and DLCs for now.)
 
 - [x] Map generation
     - [x] Generate elevation map using <https://github.com/TadaTeruki/fastlem>
@@ -81,7 +81,7 @@ WASM_SERVER_RUNNER_ADDRESS=0.0.0.0 cargo run --target wasm32-unknown-unknown
             Known issues:
             * This needs a lot more work to have rivers that feel right. See for example <https://en.wikipedia.org/wiki/Stream_order>
 
-- [ ] Spawning of [resources](https://civilization.fandom.com/wiki/Resource_(Civ6))
+    - [ ] [Resources](https://civilization.fandom.com/wiki/Resource_(Civ6))
 
 - [ ] Spawning of [starting units](https://civilization.fandom.com/wiki/Era_(Civ6)#Starting_units_and_statistics)
     - [ ] Space out the starting positions for different civs
@@ -98,7 +98,7 @@ WASM_SERVER_RUNNER_ADDRESS=0.0.0.0 cargo run --target wasm32-unknown-unknown
             into consideration. Pathfinding must be based on the last known map by the current player.
     - [ ] Queue movement for next turns when there's not enough movement points
     - [ ] Show indication if there is no path for a move
-    - [ ] Conditionally allow units to embark
+    - [ ] Conditionally allow units to [embark](https://civilization.fandom.com/wiki/Movement_(Civ6)#Embarking)
 
 - [x] Simultaneous turns
 
@@ -119,8 +119,6 @@ WASM_SERVER_RUNNER_ADDRESS=0.0.0.0 cargo run --target wasm32-unknown-unknown
 - [ ] Rejoining a game, e.g. after a disconnection / reconnection
 
 - [ ] [Tech](https://civilization.fandom.com/wiki/Technology_(Civ6)) tree
-
-- [ ] [Civic](https://civilization.fandom.com/wiki/Civic_(Civ6)) tree
 
 ## FAQs
 
