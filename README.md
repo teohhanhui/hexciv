@@ -143,21 +143,21 @@ WASM_SERVER_RUNNER_ADDRESS=0.0.0.0 cargo run --target wasm32-unknown-unknown
 
     The host needs to share the game session ID. You can join a game session by entering the ID.
 
-    Note: Not implemented yet. Currently any 2 subsequent players who connect to the matchmaking server would be paired
+    Note: Not implemented yet. Currently any 2 successive players who connect to the matchmaking server would be paired
     up with each other.
 
 * How many players can we have in a game?
 
     2-4 players.
 
-    Note: Not implemented yet. Currently any 2 subsequent players who connect to the matchmaking server would be paired
+    Note: Not implemented yet. Currently any 2 successive players who connect to the matchmaking server would be paired
     up with each other.
 
 * How do I rejoin a game if I got disconnected?
 
     You can rejoin an active game session by entering the ID. It's not possible to rejoin a game if the host leaves.
 
-    Note: Not implemented yet. Currently any 2 subsequent players who connect to the matchmaking server would be paired
+    Note: Not implemented yet. Currently any 2 successive players who connect to the matchmaking server would be paired
     up with each other.
 
 * What happens if the host or another player disconnects?
