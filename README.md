@@ -81,7 +81,9 @@ WASM_SERVER_RUNNER_ADDRESS=0.0.0.0 cargo run --target wasm32-unknown-unknown
             Known issues:
             * This needs a lot more work to have rivers that feel right. See for example <https://en.wikipedia.org/wiki/Stream_order>
 
-    - [ ] [Resources](https://civilization.fandom.com/wiki/Resource_(Civ6))
+    - [ ] [Resources]
+
+    - [ ] [Natural wonders]
 
 - [ ] Spawning of [starting units](https://civilization.fandom.com/wiki/Era_(Civ6)#Starting_units_and_statistics)
     - [ ] Space out the starting positions for different civs
@@ -107,10 +109,23 @@ WASM_SERVER_RUNNER_ADDRESS=0.0.0.0 cargo run --target wasm32-unknown-unknown
 
 - [ ] [Founding of new cities](https://civilization.fandom.com/wiki/City_(Civ6)#Founding_a_City)
 
+- [ ] [City population](https://civilization.fandom.com/wiki/Population_(Civ6))
+    - [ ] [Food]
+    - [ ] [Housing]
+    - [ ] [Amenities]
+
 - [ ] [City production](https://civilization.fandom.com/wiki/City_(Civ6)#City_Production)
-    - [ ] [Districts](https://civilization.fandom.com/wiki/District_(Civ6))
-    - [ ] [Buildings](https://civilization.fandom.com/wiki/Building_(Civ6))
-    - [ ] [Units](https://civilization.fandom.com/wiki/Unit_(Civ6))
+    - [ ] [Districts]
+    - [ ] [Buildings]
+    - [ ] [Units]
+    - [ ] [Wonders]
+    - [ ] [Purchasing](https://civilization.fandom.com/wiki/City_(Civ6)#Purchasing) with [Gold]
+        - [ ] [Buildings]
+        - [ ] [Units]
+
+- [ ] [Territorial expansion](https://civilization.fandom.com/wiki/Borders_(Civ6)#Territorial_expansion)
+  - [ ] [By cultural influence](https://civilization.fandom.com/wiki/Borders_(Civ6)#By_cultural_influence)
+  - [ ] [By purchasing](https://civilization.fandom.com/wiki/Borders_(Civ6)#By_purchasing)
 
 - [ ] Basic [combat](https://civilization.fandom.com/wiki/Combat_(Civ6)) mechanics
 
@@ -119,6 +134,17 @@ WASM_SERVER_RUNNER_ADDRESS=0.0.0.0 cargo run --target wasm32-unknown-unknown
 - [ ] Rejoining a game, e.g. after a disconnection / reconnection
 
 - [ ] [Tech](https://civilization.fandom.com/wiki/Technology_(Civ6)) tree
+
+[Amenities]: https://civilization.fandom.com/wiki/Amenities_(Civ6)
+[Buildings]: https://civilization.fandom.com/wiki/Building_(Civ6)
+[Districts]: https://civilization.fandom.com/wiki/District_(Civ6)
+[Food]: https://civilization.fandom.com/wiki/Food_(Civ6)
+[Gold]: https://civilization.fandom.com/wiki/Gold_(currency)_(Civ6)
+[Housing]: https://civilization.fandom.com/wiki/Housing_(Civ6)
+[Natural wonders]: https://civilization.fandom.com/wiki/Natural_wonder_(Civ6)
+[Resources]: https://civilization.fandom.com/wiki/Resource_(Civ6)
+[Units]: https://civilization.fandom.com/wiki/Unit_(Civ6)
+[Wonders]: https://civilization.fandom.com/wiki/Wonder_(Civ6)
 
 ## FAQs
 
