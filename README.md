@@ -82,8 +82,11 @@ WASM_SERVER_RUNNER_ADDRESS=0.0.0.0 cargo run --target wasm32-unknown-unknown
             * This needs a lot more work to have rivers that feel right. See for example <https://en.wikipedia.org/wiki/Stream_order>
 
     - [ ] [Resources]
+        - [ ] [Bonus](https://civilization.fandom.com/wiki/Resource_(Civ6)#Bonus)
+        - [ ] ~~[Luxury](https://civilization.fandom.com/wiki/Resource_(Civ6)#Luxury)~~
+        - [ ] [Strategic](https://civilization.fandom.com/wiki/Resource_(Civ6)#Strategic)
 
-    - [ ] [Natural wonders]
+    - [ ] ~~[Natural wonders]~~
 
 - [ ] Spawning of [starting units](https://civilization.fandom.com/wiki/Era_(Civ6)#Starting_units_and_statistics)
     - [ ] Space out the starting positions for different civs
@@ -111,8 +114,8 @@ WASM_SERVER_RUNNER_ADDRESS=0.0.0.0 cargo run --target wasm32-unknown-unknown
 
 - [ ] [City population](https://civilization.fandom.com/wiki/Population_(Civ6))
     - [ ] [Food]
-    - [ ] [Housing]
-    - [ ] [Amenities]
+    - [ ] ~~[Housing]~~
+    - [ ] ~~[Amenities]~~
 
 - [ ] [City production](https://civilization.fandom.com/wiki/City_(Civ6)#City_Production)
     - [ ] [Districts]
@@ -134,6 +137,8 @@ WASM_SERVER_RUNNER_ADDRESS=0.0.0.0 cargo run --target wasm32-unknown-unknown
 - [ ] Rejoining a game, e.g. after a disconnection / reconnection
 
 - [ ] [Tech](https://civilization.fandom.com/wiki/Technology_(Civ6)) tree
+
+- [ ] ~~[Civic](https://civilization.fandom.com/wiki/Civic_(Civ6)) tree~~
 
 [Amenities]: https://civilization.fandom.com/wiki/Amenities_(Civ6)
 [Buildings]: https://civilization.fandom.com/wiki/Building_(Civ6)
