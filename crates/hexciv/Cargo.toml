@@ -11,10 +11,10 @@ default-run = "hexciv"
 
 [dependencies]
 # bevy = [dependencies.bevy]
-bevy_cosmic_edit = { workspace = true, features = [] }
 bevy_ecs_tilemap = { workspace = true, features = ["render", "serde"] }
 bevy_matchbox = { workspace = true, features = [] }
 bevy_pancam = { workspace = true, features = [] }
+bevy_simple_text_input = { workspace = true, features = [] }
 bitvec = { workspace = true, features = ["std"] }
 bon = { workspace = true, features = ["std"] }
 derive_more = { workspace = true, features = ["display", "std"] }

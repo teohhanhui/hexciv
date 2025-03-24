@@ -1,13 +1,14 @@
 use std::collections::{HashMap, VecDeque};
 use std::iter;
 
+use bevy::ecs::system::SystemId;
 use bevy::prelude::*;
 use bevy_matchbox::prelude as matchbox;
 use bevy_matchbox::prelude::*;
 use bon::bon;
 use serde::{Deserialize, Serialize};
 
-use crate::game_setup::{GameRng, GameSetup, MapRng, NumPlayers};
+use crate::game_setup::{GameRng, GameSessionId, GameSetup, MapRng, NumPlayers};
 use crate::player::PlayerIndex;
 use crate::state::{GameState, MultiplayerState};
 use crate::turn::TurnStarted;
@@ -21,6 +22,9 @@ pub struct HostId(pub matchbox::PeerId);
 
 #[derive(Default, Resource)]
 pub struct SocketRxQueue(pub VecDeque<(matchbox::PeerId, Box<[u8]>)>);
+
+#[derive(Resource)]
+pub struct StartMatchboxSocketSystem(pub SystemId);
 
 #[derive(Component)]
 pub struct Peer;
@@ -62,6 +66,13 @@ pub struct ReceiveHostBroadcastSet;
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, SystemSet)]
 pub struct ReceiveRequestSet;
+
+impl FromWorld for StartMatchboxSocketSystem {
+    fn from_world(world: &mut World) -> Self {
+        let system_id = world.register_system(start_matchbox_socket);
+        Self(system_id)
+    }
+}
 
 impl From<matchbox::PeerId> for PeerId {
     fn from(inner: matchbox::PeerId) -> Self {
@@ -117,11 +128,17 @@ impl From<UnitMoved> for Request {
     }
 }
 
-pub fn start_matchbox_socket(mut commands: Commands) {
+pub fn start_matchbox_socket(
+    mut commands: Commands,
+    game_session_id: Res<GameSessionId>,
+    num_players: Res<NumPlayers>,
+) {
     let room_url = format!(
-        "ws://{host}:{port}/hexciv?next=2",
+        "ws://{host}:{port}/{room_id}?next={num_players}",
         host = option_env!("MATCHBOX_HOST").unwrap_or("127.0.0.1"),
-        port = option_env!("MATCHBOX_PORT").unwrap_or("3536")
+        port = option_env!("MATCHBOX_PORT").unwrap_or("3536"),
+        room_id = *game_session_id,
+        num_players = num_players.0,
     );
     info!(room_url, "connecting to matchbox server");
     commands.insert_resource(MatchboxSocket::new_reliable(room_url));

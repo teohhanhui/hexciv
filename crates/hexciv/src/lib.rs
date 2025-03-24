@@ -5,6 +5,7 @@ pub mod civilization;
 pub mod dev_tools;
 pub mod game_setup;
 pub mod input;
+pub mod input_dialog;
 pub mod layer;
 pub mod peer;
 pub mod player;

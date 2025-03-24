@@ -1,20 +1,23 @@
 use bevy::log::LogPlugin;
 use bevy::prelude::*;
 use bevy_ecs_tilemap::prelude::*;
+use bevy_matchbox::prelude::SingleChannel;
+use bevy_matchbox::MatchboxSocket;
 use bevy_pancam::PanCamPlugin;
 use hexciv::action::{CursorAction, GameSetupAction, GlobalAction, UnitAction};
 use hexciv::asset::FontHandle;
 use hexciv::dev_tools::TileLabelPlugin;
 use hexciv::game_setup::{host_game, join_game, GameSetupSet, HostingSet, InGameSet, JoiningSet};
 use hexciv::input::{update_cursor_pos, update_cursor_tile_pos, CursorPos, CursorTilePos};
+use hexciv::input_dialog::InputDialogPlugin;
 use hexciv::peer::{
     dispatch_host_broadcast, dispatch_request, handle_peer_connected, receive_host_broadcast,
-    receive_request, send_host_broadcast, send_request, start_matchbox_socket, wait_for_peers,
-    HostBroadcast, HostId, OurPeerId, PeerConnected, ReceiveHostBroadcastSet, ReceiveRequestSet,
-    Request, SocketRxQueue,
+    receive_request, send_host_broadcast, send_request, wait_for_peers, HostBroadcast, HostId,
+    OurPeerId, PeerConnected, ReceiveHostBroadcastSet, ReceiveRequestSet, Request, SocketRxQueue,
+    StartMatchboxSocketSystem,
 };
 use hexciv::player::{init_our_player, spawn_players};
-use hexciv::state::{GameState, MultiplayerState, TurnState};
+use hexciv::state::{GameState, InputDialogState, MultiplayerState, TurnState};
 use hexciv::terrain::{post_spawn_tilemap, spawn_tilemap, upgrade_camera, SpawnTilemapSet};
 use hexciv::turn::{handle_turn_started, TurnInProgressSet, TurnStarted};
 use hexciv::unit::{
@@ -60,6 +63,7 @@ fn main() {
                 }
             }),
     )
+    .add_plugins(InputDialogPlugin)
     .add_plugins((
         InputManagerPlugin::<GameSetupAction>::default(),
         InputManagerPlugin::<GlobalAction>::default(),
@@ -76,12 +80,14 @@ fn main() {
     .init_resource::<SocketRxQueue>()
     .init_resource::<UnitEntityMap>()
     .init_resource::<CursorPos>()
+    .init_resource::<StartMatchboxSocketSystem>()
     .insert_resource(ClearColor(Srgba::hex("#E9D4B1").unwrap().into()))
     .insert_resource(GameSetupAction::input_map())
     .insert_resource(GlobalAction::input_map())
     .insert_resource(UnitAction::input_map())
     .insert_resource(CursorAction::input_map())
     .init_state::<MultiplayerState>()
+    .init_state::<InputDialogState>()
     .init_state::<GameState>()
     .add_sub_state::<TurnState>()
     .add_event::<HostBroadcast>()
@@ -101,7 +107,7 @@ fn main() {
             TurnInProgressSet.run_if(in_state(TurnState::InProgress)),
         ),
     )
-    .add_systems(Startup, (setup, start_matchbox_socket))
+    .add_systems(Startup, setup)
     .add_systems(
         OnEnter(GameState::InGame),
         (spawn_tilemap, post_spawn_tilemap)
@@ -157,10 +163,7 @@ fn main() {
                 .before(send_host_broadcast)
                 .before(ReceiveHostBroadcastSet)
                 .before(handle_peer_connected)
-                .run_if(
-                    in_state(MultiplayerState::Hosting)
-                        .or_else(in_state(MultiplayerState::Joining)),
-                ),
+                .run_if(resource_exists::<MatchboxSocket<SingleChannel>>),
         )
             .in_set(GameSetupSet),
     )
