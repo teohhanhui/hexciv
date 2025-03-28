@@ -53,12 +53,16 @@ fn spawn_tile_labels(
     base_terrain_tile_query: Query<(&mut TilePos,), BaseTerrainLayerFilter>,
     font_handle: Res<FontHandle>,
 ) {
-    let text_style = TextStyle {
-        font: font_handle.clone(),
+    let text_font = TextFont {
+        font: font_handle.0.clone(),
         font_size: 20.0,
-        color: Color::BLACK,
+        ..Default::default()
     };
-    let text_justify = JustifyText::Center;
+    let text_color = TextColor(Color::BLACK);
+    let text_layout = TextLayout {
+        justify: JustifyText::Center,
+        ..Default::default()
+    };
     let (map_transform, map_type, grid_size, tilemap_storage) =
         base_terrain_tilemap_query.get_single().unwrap();
     for tile_entity in tilemap_storage.iter().flatten() {
@@ -69,15 +73,13 @@ fn spawn_tile_labels(
         let transform = *map_transform * Transform::from_translation(tile_center);
 
         let label_entity = commands
-            .spawn(Text2dBundle {
-                text: Text::from_section(
-                    format!("{x}, {y}", x = tile_pos.x, y = tile_pos.y),
-                    text_style.clone(),
-                )
-                .with_justify(text_justify),
+            .spawn((
+                Text2d::new(format!("{x}, {y}", x = tile_pos.x, y = tile_pos.y)),
+                text_font.clone(),
+                text_color,
+                text_layout,
                 transform,
-                ..Default::default()
-            })
+            ))
             .id();
         commands
             .entity(*tile_entity)
@@ -92,7 +94,7 @@ fn show_tile_labels(
     system_state: &mut SystemState<(Query<(&TileLabel,)>, Query<(&mut Visibility,), With<Text>>)>,
 ) {
     if tile_label_query.iter(world).next().is_none() {
-        world.run_system_once(spawn_tile_labels);
+        world.run_system_once(spawn_tile_labels).unwrap();
     }
 
     {
@@ -124,15 +126,13 @@ fn highlight_tile_labels(
     base_terrain_tilemap_query: Query<(&TileStorage,), BaseTerrainLayerFilter>,
     highlighted_base_terrain_tile_query: Query<(Entity,), With<HighlightedLabel>>,
     tile_label_query: Query<(&TileLabel,)>,
-    mut text_query: Query<(&mut Text,)>,
+    mut text_query: Query<(&mut TextColor,), With<Text2d>>,
 ) {
     // Un-highlight any previously highlighted tile labels.
     for (tile_entity,) in highlighted_base_terrain_tile_query.iter() {
         if let Ok((label,)) = tile_label_query.get(tile_entity) {
-            if let Ok((mut tile_text,)) = text_query.get_mut(label.0) {
-                for section in tile_text.sections.iter_mut() {
-                    section.style.color = Color::BLACK;
-                }
+            if let Ok((mut text_color,)) = text_query.get_mut(label.0) {
+                *text_color = TextColor(Color::BLACK);
                 commands.entity(tile_entity).remove::<HighlightedLabel>();
             }
         }
@@ -143,10 +143,8 @@ fn highlight_tile_labels(
         // Highlight the relevant tile's label
         if let Some(tile_entity) = tile_storage.get(&cursor_tile_pos.0) {
             if let Ok((label,)) = tile_label_query.get(tile_entity) {
-                if let Ok((mut tile_text,)) = text_query.get_mut(label.0) {
-                    for section in tile_text.sections.iter_mut() {
-                        section.style.color = palettes::tailwind::RED_600.into();
-                    }
+                if let Ok((mut text_color,)) = text_query.get_mut(label.0) {
+                    *text_color = TextColor(palettes::tailwind::RED_600.into());
                     commands.entity(tile_entity).insert(HighlightedLabel);
                 }
             }

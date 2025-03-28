@@ -66,7 +66,7 @@ pub fn host_game(
     );
     let num_players = NumPlayers(2);
 
-    actions_legend_text.sections[0].value = format!(
+    actions_legend_text.0 = format!(
         "Hosting game...\nGame session ID: {game_session_id}\nPlayers: {num_players}\n",
         num_players = num_players.0
     );
@@ -89,11 +89,11 @@ pub fn join_game(
 ) {
     let (mut actions_legend_text,) = actions_legend_text_query.get_single_mut().unwrap();
 
-    actions_legend_text.sections[0].value = "Joining game...\n".to_owned();
+    actions_legend_text.0 = "Joining game...\n".to_owned();
 
     next_multiplayer_state.set(MultiplayerState::Joining);
 
-    let callback_system_id = commands.register_one_shot_system(join_game_callback);
+    let callback_system_id = commands.register_system(join_game_callback);
     commands.insert_resource(InputDialogCallback(callback_system_id));
     next_input_dialog_state.set(InputDialogState::Shown);
 }

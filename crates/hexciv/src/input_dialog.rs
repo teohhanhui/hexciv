@@ -1,7 +1,8 @@
 use bevy::ecs::system::SystemId;
 use bevy::prelude::*;
 use bevy_simple_text_input::{
-    TextInputBundle, TextInputPlugin, TextInputSubmitEvent, TextInputSystem,
+    TextInput, TextInputPlugin, TextInputSubmitEvent, TextInputSystem, TextInputTextColor,
+    TextInputTextFont,
 };
 
 use crate::asset::FontHandle;
@@ -34,42 +35,38 @@ impl Plugin for InputDialogPlugin {
                 Update,
                 handle_text_input_submit
                     .after(TextInputSystem)
-                    .run_if(on_event::<TextInputSubmitEvent>()),
+                    .run_if(on_event::<TextInputSubmitEvent>),
             );
     }
 }
 
 fn show_input_dialog(mut commands: Commands, font_handle: Res<FontHandle>) {
     let parent_entity = commands
-        .spawn(NodeBundle {
-            style: Style {
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
-                align_items: AlignItems::Center,
-                justify_content: JustifyContent::Center,
-                ..Default::default()
-            },
+        .spawn(Node {
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::Center,
             ..Default::default()
         })
         .with_children(|parent| {
             parent.spawn((
-                NodeBundle {
-                    style: Style {
-                        width: Val::Vw(80.0),
-                        max_width: Val::VMin(100.0),
-                        border: UiRect::all(Val::Px(5.0)),
-                        padding: UiRect::all(Val::Px(5.0)),
-                        ..Default::default()
-                    },
-                    border_color: BORDER_COLOR_ACTIVE.into(),
-                    background_color: BACKGROUND_COLOR.into(),
+                Node {
+                    width: Val::Vw(80.0),
+                    max_width: Val::VMin(100.0),
+                    border: UiRect::all(Val::Px(5.0)),
+                    padding: UiRect::all(Val::Px(5.0)),
                     ..Default::default()
                 },
-                TextInputBundle::default().with_text_style(TextStyle {
-                    font: font_handle.clone(),
+                BorderColor(BORDER_COLOR_ACTIVE),
+                BackgroundColor(BACKGROUND_COLOR),
+                TextInput,
+                TextInputTextFont(TextFont {
+                    font: font_handle.0.clone(),
                     font_size: 40.0,
-                    color: TEXT_COLOR,
+                    ..Default::default()
                 }),
+                TextInputTextColor(TextColor(TEXT_COLOR)),
             ));
         })
         .id();

@@ -247,7 +247,7 @@ pub fn spawn_tilemap(
 
     let (mut actions_legend_text,) = actions_legend_text_query.get_single_mut().unwrap();
 
-    actions_legend_text.sections[0].value = "".to_owned();
+    actions_legend_text.0 = "".to_owned();
 
     let map_size = TilemapSize {
         x: MAP_SIDE_LENGTH_X,

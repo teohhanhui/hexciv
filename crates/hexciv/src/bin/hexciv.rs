@@ -1,7 +1,6 @@
 use bevy::log::LogPlugin;
 use bevy::prelude::*;
 use bevy_ecs_tilemap::prelude::*;
-use bevy_matchbox::prelude::SingleChannel;
 use bevy_matchbox::MatchboxSocket;
 use bevy_pancam::PanCamPlugin;
 use hexciv::action::{CursorAction, GameSetupAction, GlobalAction, UnitAction};
@@ -163,7 +162,7 @@ fn main() {
                 .before(send_host_broadcast)
                 .before(ReceiveHostBroadcastSet)
                 .before(handle_peer_connected)
-                .run_if(resource_exists::<MatchboxSocket<SingleChannel>>),
+                .run_if(resource_exists::<MatchboxSocket>),
         )
             .in_set(GameSetupSet),
     )
@@ -174,7 +173,7 @@ fn main() {
                 send_host_broadcast,
                 (
                     receive_request,
-                    dispatch_request.run_if(on_event::<Request>()),
+                    dispatch_request.run_if(on_event::<Request>),
                 )
                     .chain()
                     .in_set(ReceiveRequestSet),
@@ -184,23 +183,23 @@ fn main() {
                 send_request,
                 (
                     receive_host_broadcast,
-                    dispatch_host_broadcast.run_if(on_event::<HostBroadcast>()),
+                    dispatch_host_broadcast.run_if(on_event::<HostBroadcast>),
                 )
                     .chain()
                     .in_set(ReceiveHostBroadcastSet),
             )
                 .in_set(JoiningSet),
         )
-            .run_if(resource_exists::<OurPeerId>.and_then(resource_exists::<HostId>)),
+            .run_if(resource_exists::<OurPeerId>.and(resource_exists::<HostId>)),
     )
     .add_systems(
         Update,
         (
             // TODO: Ensure events are processed in-order.
-            handle_peer_connected.run_if(on_event::<PeerConnected>()),
-            handle_turn_started.run_if(on_event::<TurnStarted>()),
-            handle_unit_spawned.run_if(on_event::<UnitSpawned>()),
-            handle_unit_moved.run_if(on_event::<UnitMoved>()),
+            handle_peer_connected.run_if(on_event::<PeerConnected>),
+            handle_turn_started.run_if(on_event::<TurnStarted>),
+            handle_unit_spawned.run_if(on_event::<UnitSpawned>),
+            handle_unit_moved.run_if(on_event::<UnitMoved>),
         )
             .after(ReceiveHostBroadcastSet)
             .after(ReceiveRequestSet)
@@ -215,8 +214,8 @@ fn main() {
             .chain()
             .run_if(
                 action_just_pressed(GlobalAction::PreviousReadyUnit)
-                    .or_else(action_just_pressed(GlobalAction::NextReadyUnit))
-                    .and_then(has_ready_units),
+                    .or(action_just_pressed(GlobalAction::NextReadyUnit))
+                    .and(has_ready_units),
             )
             .in_set(TurnInProgressSet),
     )
@@ -243,7 +242,7 @@ fn main() {
             move_active_unit_to
                 .run_if(
                     action_just_pressed(CursorAction::SecondaryClick)
-                        .and_then(should_move_active_unit_to),
+                        .and(should_move_active_unit_to),
                 )
                 .in_set(TurnInProgressSet),
         )
@@ -254,7 +253,7 @@ fn main() {
     .add_systems(
         Update,
         handle_unit_selected
-            .run_if(on_event::<UnitSelected>())
+            .run_if(on_event::<UnitSelected>)
             .in_set(InGameSet),
     );
 
@@ -267,20 +266,22 @@ fn main() {
 }
 
 fn setup(mut commands: Commands, font_handle: Res<FontHandle>) {
-    commands.spawn(Camera2dBundle::default());
+    commands.spawn(Camera2d);
     commands
-        .spawn(
-            TextBundle::from_section("[H] Host game\n[J] Join game", TextStyle {
-                font: font_handle.clone(),
+        .spawn((
+            Text::new("[H] Host game\n[J] Join game"),
+            TextFont {
+                font: font_handle.0.clone(),
                 font_size: 24.0,
-                color: Srgba::hex("#5C3F21").unwrap().into(),
-            })
-            .with_style(Style {
+                ..Default::default()
+            },
+            TextColor(Srgba::hex("#5C3F21").unwrap().into()),
+            Node {
                 position_type: PositionType::Absolute,
                 top: Val::Px(12.),
                 left: Val::Px(12.),
                 ..Default::default()
-            }),
-        )
+            },
+        ))
         .insert(ActionsLegend);
 }

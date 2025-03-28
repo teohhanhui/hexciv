@@ -1318,7 +1318,7 @@ pub fn handle_unit_selected(
         if matches!(turn_state.get(), TurnState::InProgress) {
             unit_actions_msg += "[Space] Skip Turn\n";
         }
-        actions_legend_text.sections[0].value = unit_actions_msg;
+        actions_legend_text.0 = unit_actions_msg;
     }
 
     // Do the deferred spawning.

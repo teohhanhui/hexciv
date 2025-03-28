@@ -14,6 +14,8 @@ use crate::state::{GameState, MultiplayerState};
 use crate::turn::TurnStarted;
 use crate::unit::{ActionsLegend, UnitMoved, UnitSpawned};
 
+const CHANNEL_ID: usize = 0;
+
 #[derive(Debug, Resource)]
 pub struct OurPeerId(pub matchbox::PeerId);
 
@@ -147,7 +149,7 @@ pub fn start_matchbox_socket(
 #[allow(clippy::too_many_arguments)]
 pub fn wait_for_peers(
     mut commands: Commands,
-    mut socket: ResMut<MatchboxSocket<SingleChannel>>,
+    mut socket: ResMut<MatchboxSocket>,
     mut socket_rx_queue: ResMut<SocketRxQueue>,
     map_rng: Option<Res<MapRng>>,
     game_rng: Option<Res<GameRng>>,
@@ -168,8 +170,8 @@ pub fn wait_for_peers(
         if peers.len() < (num_players.0 - 1).into() {
             // Keep waiting until all peers have connected.
             let msg = "Waiting for peers...\n";
-            if !actions_legend_text.sections[0].value.ends_with(msg) {
-                actions_legend_text.sections[0].value += msg;
+            if !actions_legend_text.0.ends_with(msg) {
+                actions_legend_text.0 += msg;
             }
             return;
         }
@@ -197,8 +199,9 @@ pub fn wait_for_peers(
             );
             let game_setup_message =
                 serde_json::to_vec(&game_setup).expect("serializing game setup should not fail");
+            let channel = socket.channel_mut(CHANNEL_ID);
             for &peer_id in &peers {
-                socket.send(game_setup_message.clone().into(), peer_id);
+                channel.send(game_setup_message.clone().into(), peer_id);
             }
             for (i, peer_id) in iter::once(host_id).chain(peers).enumerate() {
                 peer_connected_events.send(PeerConnected {
@@ -209,7 +212,9 @@ pub fn wait_for_peers(
             host_id
         },
         MultiplayerState::Joining => {
-            socket_rx_queue.0.extend(socket.receive());
+            socket_rx_queue
+                .0
+                .extend(socket.channel_mut(CHANNEL_ID).receive());
             let Some((host_id, game_setup_message)) = socket_rx_queue.0.front() else {
                 // Keep waiting for game setup messsage.
                 return;
@@ -247,7 +252,7 @@ pub fn wait_for_peers(
 ///
 /// This should be called on the host.
 pub fn send_host_broadcast(
-    mut socket: ResMut<MatchboxSocket<SingleChannel>>,
+    mut socket: ResMut<MatchboxSocket>,
     host_id: Res<HostId>,
     our_peer_id: Res<OurPeerId>,
     mut host_broadcast_events: EventReader<HostBroadcast>,
@@ -255,13 +260,14 @@ pub fn send_host_broadcast(
     assert!(our_peer_id.0 == host_id.0);
     let peers: Vec<_> = socket.connected_peers().collect();
 
+    let channel = socket.channel_mut(CHANNEL_ID);
     for host_broadcast in host_broadcast_events.read() {
         debug!(?host_broadcast, host_id = ?host_id.0, ?peers, "sending host broadcast");
         let message = serde_json::to_vec(host_broadcast)
             .expect("serializing host broadcast event should not fail");
 
         for &peer_id in &peers {
-            socket.send(message.clone().into(), peer_id);
+            channel.send(message.clone().into(), peer_id);
         }
     }
 }
@@ -270,14 +276,16 @@ pub fn send_host_broadcast(
 ///
 /// This should not be called on the host.
 pub fn receive_host_broadcast(
-    mut socket: ResMut<MatchboxSocket<SingleChannel>>,
+    mut socket: ResMut<MatchboxSocket>,
     mut socket_rx_queue: ResMut<SocketRxQueue>,
     our_peer_id: Res<OurPeerId>,
     host_id: Res<HostId>,
     mut host_broadcast_events: EventWriter<HostBroadcast>,
 ) {
     assert!(our_peer_id.0 != host_id.0);
-    socket_rx_queue.0.extend(socket.receive());
+    socket_rx_queue
+        .0
+        .extend(socket.channel_mut(CHANNEL_ID).receive());
 
     for (peer_id, message) in socket_rx_queue.0.drain(..) {
         assert!(peer_id == host_id.0);
@@ -324,17 +332,18 @@ pub fn dispatch_host_broadcast(
 ///
 /// This should not be called on the host.
 pub fn send_request(
-    mut socket: ResMut<MatchboxSocket<SingleChannel>>,
+    mut socket: ResMut<MatchboxSocket>,
     host_id: Res<HostId>,
     our_peer_id: Res<OurPeerId>,
     mut request_events: EventReader<Request>,
 ) {
     assert!(our_peer_id.0 != host_id.0);
+    let channel = socket.channel_mut(CHANNEL_ID);
     for request in request_events.read() {
         debug!(?request, host_id = ?host_id.0, our_peer_id = ?our_peer_id.0, "sending request");
         let message =
             serde_json::to_vec(request).expect("serializing request event should not fail");
-        socket.send(message.into(), host_id.0);
+        channel.send(message.into(), host_id.0);
     }
 }
 
@@ -342,14 +351,16 @@ pub fn send_request(
 ///
 /// This should be called on the host.
 pub fn receive_request(
-    mut socket: ResMut<MatchboxSocket<SingleChannel>>,
+    mut socket: ResMut<MatchboxSocket>,
     mut socket_rx_queue: ResMut<SocketRxQueue>,
     host_id: Res<HostId>,
     our_peer_id: Res<OurPeerId>,
     mut request_events: EventWriter<Request>,
 ) {
     assert!(our_peer_id.0 == host_id.0);
-    socket_rx_queue.0.extend(socket.receive());
+    socket_rx_queue
+        .0
+        .extend(socket.channel_mut(CHANNEL_ID).receive());
 
     for (peer_id, message) in socket_rx_queue.0.drain(..) {
         assert!(peer_id != host_id.0);

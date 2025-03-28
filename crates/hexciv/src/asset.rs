@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
-#[derive(Deref, Resource)]
-pub struct FontHandle(Handle<Font>);
+#[derive(Resource)]
+pub struct FontHandle(pub Handle<Font>);
 
 impl FromWorld for FontHandle {
     fn from_world(world: &mut World) -> Self {

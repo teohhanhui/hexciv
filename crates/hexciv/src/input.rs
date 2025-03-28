@@ -28,8 +28,7 @@ pub fn update_cursor_pos(
         // by any transforms on the camera. This is done by projecting the
         // cursor position into camera space (world space).
         for (camera_transform, camera) in camera_query.iter() {
-            if let Some(pos) = camera.viewport_to_world_2d(camera_transform, cursor_moved.position)
-            {
+            if let Ok(pos) = camera.viewport_to_world_2d(camera_transform, cursor_moved.position) {
                 *cursor_pos = CursorPos(pos);
             }
         }
