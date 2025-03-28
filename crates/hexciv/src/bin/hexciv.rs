@@ -13,12 +13,13 @@ use hexciv::peer::{
     dispatch_host_broadcast, dispatch_request, handle_peer_connected, receive_host_broadcast,
     receive_request, send_host_broadcast, send_request, wait_for_peers, HostBroadcast, HostId,
     OurPeerId, PeerConnected, ReceiveHostBroadcastSet, ReceiveRequestSet, Request, SocketRxQueue,
-    StartMatchboxSocketSystem,
 };
-use hexciv::player::{init_our_player, spawn_players};
+use hexciv::player::{spawn_players, OurPlayer};
 use hexciv::state::{GameState, InputDialogState, MultiplayerState, TurnState};
 use hexciv::terrain::{post_spawn_tilemap, spawn_tilemap, upgrade_camera, SpawnTilemapSet};
-use hexciv::turn::{handle_turn_started, TurnInProgressSet, TurnStarted};
+use hexciv::turn::{
+    handle_turn_started, mark_turn_in_progress, CurrentTurn, TurnInProgressSet, TurnStarted,
+};
 use hexciv::unit::{
     cycle_ready_unit, focus_camera_on_active_unit, handle_unit_moved, handle_unit_selected,
     handle_unit_spawned, has_ready_units, mark_active_unit_fortified,
@@ -79,7 +80,6 @@ fn main() {
     .init_resource::<SocketRxQueue>()
     .init_resource::<UnitEntityMap>()
     .init_resource::<CursorPos>()
-    .init_resource::<StartMatchboxSocketSystem>()
     .insert_resource(ClearColor(Srgba::hex("#E9D4B1").unwrap().into()))
     .insert_resource(GameSetupAction::input_map())
     .insert_resource(GlobalAction::input_map())
@@ -131,10 +131,7 @@ fn main() {
     .add_systems(
         OnEnter(GameState::InGame),
         (
-            spawn_players,
-            init_our_player
-                .after(ReceiveHostBroadcastSet)
-                .after(handle_peer_connected),
+            spawn_players.before(handle_peer_connected),
             spawn_starting_units
                 .after(SpawnTilemapSet)
                 .run_if(in_state(MultiplayerState::Hosting)),
@@ -161,7 +158,6 @@ fn main() {
             wait_for_peers
                 .before(send_host_broadcast)
                 .before(ReceiveHostBroadcastSet)
-                .before(handle_peer_connected)
                 .run_if(resource_exists::<MatchboxSocket>),
         )
             .in_set(GameSetupSet),
@@ -204,6 +200,14 @@ fn main() {
             .after(ReceiveHostBroadcastSet)
             .after(ReceiveRequestSet)
             .in_set(InGameSet),
+    )
+    .add_systems(
+        Update,
+        mark_turn_in_progress.run_if(
+            in_state(TurnState::Processing)
+                .and(resource_exists_and_changed::<CurrentTurn>)
+                .and(resource_exists::<OurPlayer>),
+        ),
     )
     .add_systems(
         Update,

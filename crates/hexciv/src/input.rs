@@ -39,12 +39,12 @@ pub fn update_cursor_pos(
 pub fn update_cursor_tile_pos(
     mut commands: Commands,
     cursor_pos: Res<CursorPos>,
-    tilemap_query: Query<
+    tilemap_query: Single<
         (&TilemapSize, &TilemapGridSize, &TilemapType, &Transform),
         BaseTerrainLayerFilter,
     >,
 ) {
-    let (map_size, grid_size, map_type, map_transform) = tilemap_query.get_single().unwrap();
+    let (map_size, grid_size, map_type, map_transform) = tilemap_query.into_inner();
     // Grab the cursor position from the `Res<CursorPos>`
     let cursor_pos: Vec2 = cursor_pos.0;
     // We need to make sure that the cursor's world position is correct relative to

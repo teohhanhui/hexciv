@@ -240,12 +240,12 @@ pub fn spawn_tilemap(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     mut map_rng: ResMut<MapRng>,
-    mut actions_legend_text_query: Query<(&mut Text,), With<ActionsLegend>>,
+    actions_legend_text_query: Single<(&mut Text,), With<ActionsLegend>>,
 ) {
     let rng = &mut map_rng.0;
     info!(seed = rng.get_seed(), "map seed");
 
-    let (mut actions_legend_text,) = actions_legend_text_query.get_single_mut().unwrap();
+    let (mut actions_legend_text,) = actions_legend_text_query.into_inner();
 
     actions_legend_text.0 = "".to_owned();
 
@@ -591,22 +591,18 @@ pub fn post_spawn_tilemap(
     mut commands: Commands,
     mut map_rng: ResMut<MapRng>,
     map_terrain: Res<MapTerrain>,
-    base_terrain_tilemap_query: Query<(&TilemapSize, &TileStorage), BaseTerrainLayerFilter>,
-    mut river_tilemap_query: Query<(Entity, &mut TileStorage), RiverLayerFilter>,
-    mut terrain_features_tilemap_query: Query<
-        (Entity, &mut TileStorage),
-        TerrainFeaturesLayerFilter,
-    >,
+    base_terrain_tilemap_query: Single<(&TilemapSize, &TileStorage), BaseTerrainLayerFilter>,
+    river_tilemap_query: Single<(Entity, &mut TileStorage), RiverLayerFilter>,
+    terrain_features_tilemap_query: Single<(Entity, &mut TileStorage), TerrainFeaturesLayerFilter>,
     mut base_terrain_tile_query: Query<(&mut TileTextureIndex,), BaseTerrainLayerFilter>,
 ) {
     let rng = &mut map_rng.0;
     let terrain = &map_terrain.0;
 
-    let (map_size, base_terrain_tile_storage) = base_terrain_tilemap_query.get_single().unwrap();
+    let (map_size, base_terrain_tile_storage) = base_terrain_tilemap_query.into_inner();
     let (terrain_features_tilemap_entity, mut terrain_features_tile_storage) =
-        terrain_features_tilemap_query.get_single_mut().unwrap();
-    let (river_tilemap_entity, mut river_tile_storage) =
-        river_tilemap_query.get_single_mut().unwrap();
+        terrain_features_tilemap_query.into_inner();
+    let (river_tilemap_entity, mut river_tile_storage) = river_tilemap_query.into_inner();
 
     let mut river_edges_map: HashMap<TilePos, RiverEdges> = HashMap::new();
 
@@ -853,8 +849,8 @@ pub fn post_spawn_tilemap(
     }
 }
 
-pub fn upgrade_camera(mut commands: Commands, camera_query: Query<(Entity,), With<Camera2d>>) {
-    let (camera_entity,) = camera_query.get_single().unwrap();
+pub fn upgrade_camera(mut commands: Commands, camera_query: Single<(Entity,), With<Camera2d>>) {
+    let (camera_entity,) = camera_query.into_inner();
 
     commands.entity(camera_entity).insert(PanCam {
         grab_buttons: vec![MouseButton::Left],

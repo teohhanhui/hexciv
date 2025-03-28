@@ -1,7 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::iter;
 
-use bevy::ecs::system::SystemId;
 use bevy::prelude::*;
 use bevy_matchbox::prelude as matchbox;
 use bevy_matchbox::prelude::*;
@@ -9,7 +8,7 @@ use bon::bon;
 use serde::{Deserialize, Serialize};
 
 use crate::game_setup::{GameRng, GameSessionId, GameSetup, MapRng, NumPlayers};
-use crate::player::PlayerIndex;
+use crate::player::{init_our_player, PlayerIndex};
 use crate::state::{GameState, MultiplayerState};
 use crate::turn::TurnStarted;
 use crate::unit::{ActionsLegend, UnitMoved, UnitSpawned};
@@ -24,9 +23,6 @@ pub struct HostId(pub matchbox::PeerId);
 
 #[derive(Default, Resource)]
 pub struct SocketRxQueue(pub VecDeque<(matchbox::PeerId, Box<[u8]>)>);
-
-#[derive(Resource)]
-pub struct StartMatchboxSocketSystem(pub SystemId);
 
 #[derive(Component)]
 pub struct Peer;
@@ -68,13 +64,6 @@ pub struct ReceiveHostBroadcastSet;
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, SystemSet)]
 pub struct ReceiveRequestSet;
-
-impl FromWorld for StartMatchboxSocketSystem {
-    fn from_world(world: &mut World) -> Self {
-        let system_id = world.register_system(start_matchbox_socket);
-        Self(system_id)
-    }
-}
 
 impl From<matchbox::PeerId> for PeerId {
     fn from(inner: matchbox::PeerId) -> Self {
@@ -156,15 +145,16 @@ pub fn wait_for_peers(
     num_players: Option<Res<NumPlayers>>,
     multiplayer_state: Res<State<MultiplayerState>>,
     mut next_game_state: ResMut<NextState<GameState>>,
-    mut actions_legend_text_query: Query<(&mut Text,), With<ActionsLegend>>,
+    actions_legend_text_query: Single<(&mut Text,), With<ActionsLegend>>,
     mut peer_connected_events: EventWriter<PeerConnected>,
 ) {
-    let (mut actions_legend_text,) = actions_legend_text_query.get_single_mut().unwrap();
+    let (mut actions_legend_text,) = actions_legend_text_query.into_inner();
 
-    // Check for new connections.
+    // debug!("checking for new peers");
     socket.update_peers();
 
     let peers: Vec<_> = socket.connected_peers().collect();
+    // debug!(?peers, "connected peers");
 
     if let Some(num_players) = &num_players {
         if peers.len() < (num_players.0 - 1).into() {
@@ -230,10 +220,6 @@ pub fn wait_for_peers(
             commands.insert_resource(MapRng(fastrand::Rng::with_seed(map_seed)));
             commands.insert_resource(GameRng(fastrand::Rng::with_seed(game_seed)));
             commands.insert_resource(NumPlayers(num_players));
-            if socket_rx_queue.0.len() < (num_players + 1).into() {
-                // Keep waiting for peer connected event messages.
-                return;
-            }
             let (host_id, _) = socket_rx_queue.0.pop_front().unwrap();
             host_id
         },
@@ -438,4 +424,6 @@ pub fn handle_peer_connected(
     }
 
     commands.spawn_batch(new_peer_bundles.into_values());
+
+    commands.run_system_cached(init_our_player);
 }

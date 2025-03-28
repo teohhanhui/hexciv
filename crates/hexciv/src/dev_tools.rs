@@ -46,7 +46,7 @@ impl Plugin for TileLabelPlugin {
 /// Generates tile position labels.
 fn spawn_tile_labels(
     mut commands: Commands,
-    base_terrain_tilemap_query: Query<
+    base_terrain_tilemap_query: Single<
         (&Transform, &TilemapType, &TilemapGridSize, &TileStorage),
         BaseTerrainLayerFilter,
     >,
@@ -64,7 +64,7 @@ fn spawn_tile_labels(
         ..Default::default()
     };
     let (map_transform, map_type, grid_size, tilemap_storage) =
-        base_terrain_tilemap_query.get_single().unwrap();
+        base_terrain_tilemap_query.into_inner();
     for tile_entity in tilemap_storage.iter().flatten() {
         let (tile_pos,) = base_terrain_tile_query.get(*tile_entity).unwrap();
         let tile_center = tile_pos
@@ -91,7 +91,10 @@ fn spawn_tile_labels(
 fn show_tile_labels(
     world: &mut World,
     tile_label_query: &mut QueryState<(), With<TileLabel>>,
-    system_state: &mut SystemState<(Query<(&TileLabel,)>, Query<(&mut Visibility,), With<Text>>)>,
+    system_state: &mut SystemState<(
+        Query<(&TileLabel,)>,
+        Query<(&mut Visibility,), With<Text2d>>,
+    )>,
 ) {
     if tile_label_query.iter(world).next().is_none() {
         world.run_system_once(spawn_tile_labels).unwrap();
@@ -110,7 +113,7 @@ fn show_tile_labels(
 
 fn hide_tile_labels(
     tile_label_query: Query<(&TileLabel,)>,
-    mut text_query: Query<(&mut Visibility,), With<Text>>,
+    mut text_query: Query<(&mut Visibility,), With<Text2d>>,
 ) {
     for (tile_label,) in tile_label_query.iter() {
         if let Ok((mut visibility,)) = text_query.get_mut(tile_label.0) {
@@ -123,7 +126,7 @@ fn hide_tile_labels(
 fn highlight_tile_labels(
     mut commands: Commands,
     cursor_tile_pos: Option<Res<CursorTilePos>>,
-    base_terrain_tilemap_query: Query<(&TileStorage,), BaseTerrainLayerFilter>,
+    base_terrain_tilemap_query: Single<(&TileStorage,), BaseTerrainLayerFilter>,
     highlighted_base_terrain_tile_query: Query<(Entity,), With<HighlightedLabel>>,
     tile_label_query: Query<(&TileLabel,)>,
     mut text_query: Query<(&mut TextColor,), With<Text2d>>,
@@ -138,7 +141,7 @@ fn highlight_tile_labels(
         }
     }
 
-    let (tile_storage,) = base_terrain_tilemap_query.get_single().unwrap();
+    let (tile_storage,) = base_terrain_tilemap_query.into_inner();
     if let Some(cursor_tile_pos) = cursor_tile_pos {
         // Highlight the relevant tile's label
         if let Some(tile_entity) = tile_storage.get(&cursor_tile_pos.0) {

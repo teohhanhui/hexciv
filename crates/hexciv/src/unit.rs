@@ -431,14 +431,14 @@ impl LandMilitaryUnitTileBundle {
 pub fn spawn_starting_units(
     mut game_rng: ResMut<GameRng>,
     player_query: Query<(&PlayerIndex, &Civilization), With<Player>>,
-    base_terrain_tilemap_query: Query<(&TilemapSize, &TileStorage), BaseTerrainLayerFilter>,
+    base_terrain_tilemap_query: Single<(&TilemapSize, &TileStorage), BaseTerrainLayerFilter>,
     base_terrain_tile_query: Query<(&TileTextureIndex,), BaseTerrainLayerFilter>,
     mut turn_started_events: EventWriter<TurnStarted>,
     mut unit_spawned_events: EventWriter<UnitSpawned>,
 ) {
     let rng = &mut game_rng.0;
 
-    let (map_size, base_terrain_tile_storage) = base_terrain_tilemap_query.get_single().unwrap();
+    let (map_size, base_terrain_tile_storage) = base_terrain_tilemap_query.into_inner();
 
     let mut allowable_starting_positions = HashSet::new();
     for x in 0..map_size.x {
@@ -641,15 +641,15 @@ pub fn cycle_ready_unit(
 }
 
 pub fn focus_camera_on_active_unit(
-    mut camera_query: Query<(&mut Transform,), (With<Camera2d>, Without<UnitSelectionLayer>)>,
-    unit_selection_tilemap_query: Query<
+    camera_query: Single<(&mut Transform,), (With<Camera2d>, Without<UnitSelectionLayer>)>,
+    unit_selection_tilemap_query: Single<
         (&Transform, &TilemapType, &TilemapGridSize),
         (UnitSelectionLayerFilter, Without<Camera2d>),
     >,
     unit_selection_tile_query: Query<(&TilePos, &TileTextureIndex), UnitSelectionLayerFilter>,
 ) {
-    let (mut camera_transform,) = camera_query.get_single_mut().unwrap();
-    let (map_transform, map_type, grid_size) = unit_selection_tilemap_query.get_single().unwrap();
+    let (mut camera_transform,) = camera_query.into_inner();
+    let (map_transform, map_type, grid_size) = unit_selection_tilemap_query.into_inner();
 
     let active_unit_selection =
         unit_selection_tile_query
@@ -667,7 +667,7 @@ pub fn focus_camera_on_active_unit(
 }
 
 pub fn mark_active_unit_out_of_orders(
-    unit_state_tilemap_query: Query<(&TileStorage,), UnitStateLayerFilter>,
+    unit_state_tilemap_query: Single<(&TileStorage,), UnitStateLayerFilter>,
     unit_selection_tile_query: Query<
         (&TilePos, &TileTextureIndex, &UnitEntityId),
         UnitSelectionLayerFilter,
@@ -675,7 +675,7 @@ pub fn mark_active_unit_out_of_orders(
     mut unit_state_tile_query: Query<(&mut TileTextureIndex,), UnitStateLayerFilter>,
     mut unit_query: Query<(&mut UnitState,), UnitFilter>,
 ) {
-    let (unit_state_tile_storage,) = unit_state_tilemap_query.get_single().unwrap();
+    let (unit_state_tile_storage,) = unit_state_tilemap_query.into_inner();
 
     let active_unit_selection =
         unit_selection_tile_query
@@ -717,8 +717,8 @@ pub fn mark_active_unit_out_of_orders(
 }
 
 pub fn mark_active_unit_fortified(
-    unit_state_tilemap_query: Query<(&TileStorage,), UnitStateLayerFilter>,
-    land_military_unit_tilemap_query: Query<(&TileStorage,), LandMilitaryUnitLayerFilter>,
+    unit_state_tilemap_query: Single<(&TileStorage,), UnitStateLayerFilter>,
+    land_military_unit_tilemap_query: Single<(&TileStorage,), LandMilitaryUnitLayerFilter>,
     unit_selection_tile_query: Query<
         (&TilePos, &TileTextureIndex, &UnitEntityId),
         UnitSelectionLayerFilter,
@@ -726,8 +726,8 @@ pub fn mark_active_unit_fortified(
     mut unit_state_tile_query: Query<(&mut TileTextureIndex,), UnitStateLayerFilter>,
     mut unit_query: Query<(&mut UnitState,), UnitFilter>,
 ) {
-    let (unit_state_tile_storage,) = unit_state_tilemap_query.get_single().unwrap();
-    let (land_military_unit_tile_storage,) = land_military_unit_tilemap_query.get_single().unwrap();
+    let (unit_state_tile_storage,) = unit_state_tilemap_query.into_inner();
+    let (land_military_unit_tile_storage,) = land_military_unit_tilemap_query.into_inner();
 
     let active_unit_selection =
         unit_selection_tile_query
@@ -768,7 +768,7 @@ pub fn select_unit(
     our_player: Res<OurPlayer>,
     cursor_tile_pos: Res<CursorTilePos>,
     player_query: Query<(&Civilization,), With<Player>>,
-    unit_state_tilemap_query: Query<(&TileStorage,), UnitStateLayerFilter>,
+    unit_state_tilemap_query: Single<(&TileStorage,), UnitStateLayerFilter>,
     unit_selection_tile_query: Query<
         (&TilePos, &TileTextureIndex, &UnitEntityId),
         UnitSelectionLayerFilter,
@@ -777,7 +777,7 @@ pub fn select_unit(
     unit_query: Query<(Entity, &UnitId, &TilePos, &Civilization), UnitFilter>,
     mut unit_selected_events: EventWriter<UnitSelected>,
 ) {
-    let (unit_state_tile_storage,) = unit_state_tilemap_query.get_single().unwrap();
+    let (unit_state_tile_storage,) = unit_state_tilemap_query.into_inner();
 
     let (&current_civ,) = player_query.get(our_player.0).unwrap();
 
@@ -873,10 +873,10 @@ pub fn should_move_active_unit_to(
 pub fn move_active_unit_to(
     cursor_tile_pos: Res<CursorTilePos>,
     multiplayer_state: Res<State<MultiplayerState>>,
-    base_terrain_tilemap_query: Query<(&TilemapSize, &TileStorage), BaseTerrainLayerFilter>,
-    river_tilemap_query: Query<(&TileStorage,), RiverLayerFilter>,
-    terrain_features_tilemap_query: Query<(&TileStorage,), TerrainFeaturesLayerFilter>,
-    unit_state_tilemap_query: Query<(&TileStorage,), UnitStateLayerFilter>,
+    base_terrain_tilemap_query: Single<(&TilemapSize, &TileStorage), BaseTerrainLayerFilter>,
+    river_tilemap_query: Single<(&TileStorage,), RiverLayerFilter>,
+    terrain_features_tilemap_query: Single<(&TileStorage,), TerrainFeaturesLayerFilter>,
+    unit_state_tilemap_query: Single<(&TileStorage,), UnitStateLayerFilter>,
     base_terrain_tile_query: Query<(&TileTextureIndex,), BaseTerrainLayerFilter>,
     river_tile_query: Query<(&TileTextureIndex,), RiverLayerFilter>,
     terrain_features_tile_query: Query<(&TileTextureIndex,), TerrainFeaturesLayerFilter>,
@@ -886,10 +886,10 @@ pub fn move_active_unit_to(
     mut request_events: EventWriter<Request>,
     mut unit_moved_events: EventWriter<UnitMoved>,
 ) {
-    let (map_size, base_terrain_tile_storage) = base_terrain_tilemap_query.get_single().unwrap();
-    let (river_tile_storage,) = river_tilemap_query.get_single().unwrap();
-    let (terrain_features_tile_storage,) = terrain_features_tilemap_query.get_single().unwrap();
-    let (unit_state_tile_storage,) = unit_state_tilemap_query.get_single().unwrap();
+    let (map_size, base_terrain_tile_storage) = base_terrain_tilemap_query.into_inner();
+    let (river_tile_storage,) = river_tilemap_query.into_inner();
+    let (terrain_features_tile_storage,) = terrain_features_tilemap_query.into_inner();
+    let (unit_state_tile_storage,) = unit_state_tilemap_query.into_inner();
 
     let active_unit_selection_pos = unit_selection_tile_query
         .iter()
@@ -1066,9 +1066,9 @@ pub fn handle_unit_spawned(
     mut commands: Commands,
     mut unit_entity_map: ResMut<UnitEntityMap>,
     multiplayer_state: Res<State<MultiplayerState>>,
-    mut unit_state_tilemap_query: Query<(Entity, &mut TileStorage), UnitStateLayerFilter>,
-    mut civilian_unit_tilemap_query: Query<(Entity, &mut TileStorage), CivilianUnitLayerFilter>,
-    mut land_military_unit_tilemap_query: Query<
+    unit_state_tilemap_query: Single<(Entity, &mut TileStorage), UnitStateLayerFilter>,
+    civilian_unit_tilemap_query: Single<(Entity, &mut TileStorage), CivilianUnitLayerFilter>,
+    land_military_unit_tilemap_query: Single<
         (Entity, &mut TileStorage),
         LandMilitaryUnitLayerFilter,
     >,
@@ -1076,11 +1076,11 @@ pub fn handle_unit_spawned(
     mut unit_spawned_events: EventReader<UnitSpawned>,
 ) {
     let (unit_state_tilemap_entity, mut unit_state_tile_storage) =
-        unit_state_tilemap_query.get_single_mut().unwrap();
+        unit_state_tilemap_query.into_inner();
     let (civilian_unit_tilemap_entity, mut civilian_unit_tile_storage) =
-        civilian_unit_tilemap_query.get_single_mut().unwrap();
+        civilian_unit_tilemap_query.into_inner();
     let (land_military_unit_tilemap_entity, mut land_military_unit_tile_storage) =
-        land_military_unit_tilemap_query.get_single_mut().unwrap();
+        land_military_unit_tilemap_query.into_inner();
 
     for &unit_spawned in unit_spawned_events.read() {
         debug!(?unit_spawned, "handling unit spawned");
@@ -1178,10 +1178,10 @@ pub fn handle_unit_spawned(
 pub fn handle_unit_selected(
     mut commands: Commands,
     turn_state: Res<State<TurnState>>,
-    mut unit_selection_tilemap_query: Query<(Entity, &mut TileStorage), UnitSelectionLayerFilter>,
-    unit_state_tilemap_query: Query<(&TileStorage,), UnitStateLayerFilter>,
-    mut civilian_unit_tilemap_query: Query<(Entity, &mut TileStorage), CivilianUnitLayerFilter>,
-    mut land_military_unit_tilemap_query: Query<
+    unit_selection_tilemap_query: Single<(Entity, &mut TileStorage), UnitSelectionLayerFilter>,
+    unit_state_tilemap_query: Single<(&TileStorage,), UnitStateLayerFilter>,
+    civilian_unit_tilemap_query: Single<(Entity, &mut TileStorage), CivilianUnitLayerFilter>,
+    land_military_unit_tilemap_query: Single<
         (Entity, &mut TileStorage),
         LandMilitaryUnitLayerFilter,
     >,
@@ -1195,17 +1195,17 @@ pub fn handle_unit_selected(
     >,
     mut unit_tile_query: Query<(&mut TileTextureIndex, &mut UnitEntityId), UnitLayersFilter>,
     unit_query: Query<(&UnitType, &Civilization, &UnitState), UnitFilter>,
-    mut actions_legend_text_query: Query<(&mut Text,), With<ActionsLegend>>,
+    actions_legend_text_query: Single<(&mut Text,), With<ActionsLegend>>,
     mut unit_selected_events: EventReader<UnitSelected>,
 ) {
     let (unit_selection_tilemap_entity, mut unit_selection_tile_storage) =
-        unit_selection_tilemap_query.get_single_mut().unwrap();
-    let (unit_state_tile_storage,) = unit_state_tilemap_query.get_single().unwrap();
+        unit_selection_tilemap_query.into_inner();
+    let (unit_state_tile_storage,) = unit_state_tilemap_query.into_inner();
     let (civilian_unit_tilemap_entity, mut civilian_unit_tile_storage) =
-        civilian_unit_tilemap_query.get_single_mut().unwrap();
+        civilian_unit_tilemap_query.into_inner();
     let (land_military_unit_tilemap_entity, mut land_military_unit_tile_storage) =
-        land_military_unit_tilemap_query.get_single_mut().unwrap();
-    let (mut actions_legend_text,) = actions_legend_text_query.get_single_mut().unwrap();
+        land_military_unit_tilemap_query.into_inner();
+    let (mut actions_legend_text,) = actions_legend_text_query.into_inner();
 
     let mut new_unit_selection_tile_bundle = None;
     let mut new_unit_tile_bundles = HashMap::new();
@@ -1347,10 +1347,10 @@ pub fn handle_unit_moved(
     mut commands: Commands,
     unit_entity_map: Res<UnitEntityMap>,
     multiplayer_state: Res<State<MultiplayerState>>,
-    mut unit_selection_tilemap_query: Query<(&mut TileStorage,), UnitSelectionLayerFilter>,
-    mut unit_state_tilemap_query: Query<(Entity, &mut TileStorage), UnitStateLayerFilter>,
-    mut civilian_unit_tilemap_query: Query<(Entity, &mut TileStorage), CivilianUnitLayerFilter>,
-    mut land_military_unit_tilemap_query: Query<
+    unit_selection_tilemap_query: Single<(&mut TileStorage,), UnitSelectionLayerFilter>,
+    unit_state_tilemap_query: Single<(Entity, &mut TileStorage), UnitStateLayerFilter>,
+    civilian_unit_tilemap_query: Single<(Entity, &mut TileStorage), CivilianUnitLayerFilter>,
+    land_military_unit_tilemap_query: Single<
         (Entity, &mut TileStorage),
         LandMilitaryUnitLayerFilter,
     >,
@@ -1378,13 +1378,13 @@ pub fn handle_unit_moved(
     mut host_broadcast_events: EventWriter<HostBroadcast>,
     mut unit_moved_events: EventReader<UnitMoved>,
 ) {
-    let (mut unit_selection_tile_storage,) = unit_selection_tilemap_query.get_single_mut().unwrap();
+    let (mut unit_selection_tile_storage,) = unit_selection_tilemap_query.into_inner();
     let (unit_state_tilemap_entity, mut unit_state_tile_storage) =
-        unit_state_tilemap_query.get_single_mut().unwrap();
+        unit_state_tilemap_query.into_inner();
     let (civilian_unit_tilemap_entity, mut civilian_unit_tile_storage) =
-        civilian_unit_tilemap_query.get_single_mut().unwrap();
+        civilian_unit_tilemap_query.into_inner();
     let (land_military_unit_tilemap_entity, mut land_military_unit_tile_storage) =
-        land_military_unit_tilemap_query.get_single_mut().unwrap();
+        land_military_unit_tilemap_query.into_inner();
 
     let mut new_unit_tile_bundles = HashMap::new();
     let mut new_unit_state_tile_bundles = HashMap::new();

@@ -5,14 +5,14 @@ use derive_more::Display;
 use serde::{Deserialize, Serialize};
 
 use crate::input_dialog::{InputDialogCallback, InputDialogValue};
-use crate::peer::StartMatchboxSocketSystem;
+use crate::peer::start_matchbox_socket;
 use crate::state::{InputDialogState, MultiplayerState};
 use crate::unit::ActionsLegend;
 
 const GAME_SESSION_ID_WORD_LEN: usize = 2;
 
 static BIP39_ENGLISH_WORDLIST: LazyLock<Vec<String>> = LazyLock::new(|| {
-    let wordlist = include_str!(concat!(env!("BEVY_ASSET_ROOT"), "/bip39-english.txt")).trim_end();
+    let wordlist = include_str!(concat!(env!("BEVY_ASSET_ROOT"), "/assets/bip39-english.txt")).trim_end();
     wordlist.split('\n').map(|word| word.to_owned()).collect()
 });
 
@@ -50,11 +50,10 @@ pub struct JoiningSet;
 
 pub fn host_game(
     mut commands: Commands,
-    start_matchbox_socket_system: Res<StartMatchboxSocketSystem>,
     mut next_multiplayer_state: ResMut<NextState<MultiplayerState>>,
-    mut actions_legend_text_query: Query<(&mut Text,), With<ActionsLegend>>,
+    actions_legend_text_query: Single<(&mut Text,), With<ActionsLegend>>,
 ) {
-    let (mut actions_legend_text,) = actions_legend_text_query.get_single_mut().unwrap();
+    let (mut actions_legend_text,) = actions_legend_text_query.into_inner();
 
     let game_session_id = GameSessionId(
         fastrand::choose_multiple(&*BIP39_ENGLISH_WORDLIST, GAME_SESSION_ID_WORD_LEN)
@@ -76,7 +75,7 @@ pub fn host_game(
     commands.insert_resource(MapRng(fastrand::Rng::new()));
     commands.insert_resource(GameRng(fastrand::Rng::new()));
 
-    commands.run_system(start_matchbox_socket_system.0);
+    commands.run_system_cached(start_matchbox_socket);
 
     next_multiplayer_state.set(MultiplayerState::Hosting);
 }
@@ -85,9 +84,9 @@ pub fn join_game(
     mut commands: Commands,
     mut next_multiplayer_state: ResMut<NextState<MultiplayerState>>,
     mut next_input_dialog_state: ResMut<NextState<InputDialogState>>,
-    mut actions_legend_text_query: Query<(&mut Text,), With<ActionsLegend>>,
+    actions_legend_text_query: Single<(&mut Text,), With<ActionsLegend>>,
 ) {
-    let (mut actions_legend_text,) = actions_legend_text_query.get_single_mut().unwrap();
+    let (mut actions_legend_text,) = actions_legend_text_query.into_inner();
 
     actions_legend_text.0 = "Joining game...\n".to_owned();
 
@@ -100,7 +99,6 @@ pub fn join_game(
 
 fn join_game_callback(
     mut commands: Commands,
-    start_matchbox_socket_system: Res<StartMatchboxSocketSystem>,
     input_dialog_value: Res<InputDialogValue>,
     mut next_input_dialog_state: ResMut<NextState<InputDialogState>>,
 ) {
@@ -124,7 +122,7 @@ fn join_game_callback(
     commands.insert_resource(GameSessionId(words));
     commands.insert_resource(NumPlayers(2));
 
-    commands.run_system(start_matchbox_socket_system.0);
+    commands.run_system_cached(start_matchbox_socket);
 
     commands.remove_resource::<InputDialogCallback>();
     next_input_dialog_state.set(InputDialogState::Hidden);

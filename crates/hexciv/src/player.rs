@@ -73,14 +73,18 @@ pub fn init_our_player(
     peer_query: Query<(&PeerId, &PlayerIndex), With<Peer>>,
     player_query: Query<(Entity, &PlayerIndex), With<Player>>,
 ) {
-    let (_our_peer_id, our_player_index) = peer_query
+    let Some((_our_peer_id, our_player_index)) = peer_query
         .iter()
         .find(|(&peer_id, _player_index)| peer_id.0 == our_peer_id.0)
-        .expect("our peer info should have been populated");
+    else {
+        commands.remove_resource::<OurPlayer>();
+        return;
+    };
     let (player_entity, _player_index) = player_query
         .iter()
         .sort::<&PlayerIndex>()
         .nth(our_player_index.0.into())
+        .ok_or_else(|| format!("Could not find Player with {our_player_index:?}"))
         .unwrap();
 
     commands.insert_resource(OurPlayer(player_entity));
