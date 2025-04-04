@@ -32,7 +32,7 @@ serde = { workspace = true, features = ["derive", "std"] }
 serde_json = { workspace = true, features = ["std"] }
 strum = { workspace = true, features = ["derive", "std"] }
 tracing = { workspace = true, features = ["max_level_debug", "release_max_level_warn"] }
-uuid = { workspace = true, features = ["serde", "v4"] }
+uuid = { workspace = true, features = ["serde", "std", "v4", "v7"] }
 
 [dependencies.bevy]
 workspace = true

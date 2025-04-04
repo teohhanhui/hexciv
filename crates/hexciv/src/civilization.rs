@@ -4,7 +4,17 @@ use serde::{Deserialize, Serialize};
 use strum::VariantArray;
 
 #[derive(
-    Copy, Clone, Eq, PartialEq, Debug, Display, Component, Deserialize, Serialize, VariantArray,
+    Copy,
+    Clone,
+    Eq,
+    PartialEq,
+    Hash,
+    Debug,
+    Display,
+    Component,
+    Deserialize,
+    Serialize,
+    VariantArray,
 )]
 pub enum Civilization {
     America,

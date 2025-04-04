@@ -12,7 +12,11 @@ use crate::unit::ActionsLegend;
 const GAME_SESSION_ID_WORD_LEN: usize = 2;
 
 static BIP39_ENGLISH_WORDLIST: LazyLock<Vec<String>> = LazyLock::new(|| {
-    let wordlist = include_str!(concat!(env!("BEVY_ASSET_ROOT"), "/assets/bip39-english.txt")).trim_end();
+    let wordlist = include_str!(concat!(
+        env!("BEVY_ASSET_ROOT"),
+        "/assets/bip39-english.txt"
+    ))
+    .trim_end();
     wordlist.split('\n').map(|word| word.to_owned()).collect()
 });
 

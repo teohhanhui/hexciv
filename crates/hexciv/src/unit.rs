@@ -32,7 +32,7 @@ use crate::layer::{
     UnitSelectionLayer, UnitSelectionLayerFilter, UnitStateLayer, UnitStateLayerFilter,
 };
 use crate::peer::{HostBroadcast, Request};
-use crate::player::{OurPlayer, Player, PlayerIndex};
+use crate::player::{OurPlayer, Player};
 use crate::state::{MultiplayerState, TurnState};
 use crate::terrain::{BaseTerrain, RiverEdges, TerrainFeatures};
 use crate::turn::TurnStarted;
@@ -430,7 +430,7 @@ impl LandMilitaryUnitTileBundle {
 
 pub fn spawn_starting_units(
     mut game_rng: ResMut<GameRng>,
-    player_query: Query<(&PlayerIndex, &Civilization), With<Player>>,
+    player_query: Query<(&Player,), With<Player>>,
     base_terrain_tilemap_query: Single<(&TilemapSize, &TileStorage), BaseTerrainLayerFilter>,
     base_terrain_tile_query: Query<(&TileTextureIndex,), BaseTerrainLayerFilter>,
     mut turn_started_events: EventWriter<TurnStarted>,
@@ -462,7 +462,7 @@ pub fn spawn_starting_units(
         }
     }
 
-    for (_player_index, &civ) in player_query.iter().sort::<&PlayerIndex>() {
+    for (&Player { civ, .. },) in player_query.iter() {
         // TODO: Space out the starting positions for different civs.
         let (settler_tile_pos, warrior_tile_pos) = {
             let rng = RefCell::new(&mut *rng);
@@ -495,7 +495,7 @@ pub fn spawn_starting_units(
 
         // Spawn settler.
         unit_spawned_events.send(UnitSpawned {
-            unit_id: Uuid::new_v4().into(),
+            unit_id: Uuid::now_v7().into(),
             position: settler_tile_pos,
             unit_type: CivilianUnit::Settler.into(),
             civ,
@@ -503,7 +503,7 @@ pub fn spawn_starting_units(
 
         // Spawn warrior.
         unit_spawned_events.send(UnitSpawned {
-            unit_id: Uuid::new_v4().into(),
+            unit_id: Uuid::now_v7().into(),
             position: warrior_tile_pos,
             unit_type: LandMilitaryUnit::Warrior.into(),
             civ,
@@ -525,10 +525,12 @@ pub fn reset_movement_points(
 /// Checks if there are ready units controlled by the current player.
 pub fn has_ready_units(
     our_player: Res<OurPlayer>,
-    player_query: Query<(&Civilization,), With<Player>>,
+    player_query: Query<(&Player,), With<Player>>,
     unit_query: Query<(Entity, &TilePos, &Civilization, &UnitState), UnitFilter>,
 ) -> bool {
-    let (current_civ,) = player_query.get(our_player.0).unwrap();
+    let (Player {
+        civ: current_civ, ..
+    },) = player_query.get(our_player.0).unwrap();
 
     unit_query
         .iter()
@@ -545,7 +547,7 @@ pub fn has_ready_units(
 pub fn cycle_ready_unit(
     global_action_state: Res<ActionState<GlobalAction>>,
     our_player: Res<OurPlayer>,
-    player_query: Query<(&Civilization,), With<Player>>,
+    player_query: Query<(&Player,), With<Player>>,
     unit_selection_tile_query: Query<
         (&TilePos, &TileTextureIndex, &UnitEntityId),
         UnitSelectionLayerFilter,
@@ -553,7 +555,9 @@ pub fn cycle_ready_unit(
     unit_query: Query<(Entity, &UnitId, &TilePos, &Civilization, &UnitState), UnitFilter>,
     mut unit_selected_events: EventWriter<UnitSelected>,
 ) {
-    let (current_civ,) = player_query.get(our_player.0).unwrap();
+    let (Player {
+        civ: current_civ, ..
+    },) = player_query.get(our_player.0).unwrap();
 
     let ready_units: IndexSet<_> = unit_query
         .iter()
@@ -767,7 +771,7 @@ pub fn mark_active_unit_fortified(
 pub fn select_unit(
     our_player: Res<OurPlayer>,
     cursor_tile_pos: Res<CursorTilePos>,
-    player_query: Query<(&Civilization,), With<Player>>,
+    player_query: Query<(&Player,), With<Player>>,
     unit_state_tilemap_query: Single<(&TileStorage,), UnitStateLayerFilter>,
     unit_selection_tile_query: Query<
         (&TilePos, &TileTextureIndex, &UnitEntityId),
@@ -779,12 +783,14 @@ pub fn select_unit(
 ) {
     let (unit_state_tile_storage,) = unit_state_tilemap_query.into_inner();
 
-    let (&current_civ,) = player_query.get(our_player.0).unwrap();
+    let (Player {
+        civ: current_civ, ..
+    },) = player_query.get(our_player.0).unwrap();
 
     let units: Vec<_> = unit_query
         .iter()
         .sort::<&UnitId>()
-        .filter_map(|(unit_entity, _unit_id, &tile_pos, &civ)| {
+        .filter_map(|(unit_entity, _unit_id, &tile_pos, civ)| {
             if civ == current_civ && tile_pos == cursor_tile_pos.0 {
                 Some((unit_entity, tile_pos))
             } else {

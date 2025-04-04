@@ -2,9 +2,7 @@ use std::collections::{HashMap, VecDeque};
 use std::iter;
 
 use bevy::prelude::*;
-use bevy_matchbox::prelude as matchbox;
 use bevy_matchbox::prelude::*;
-use bon::bon;
 use serde::{Deserialize, Serialize};
 
 use crate::game_setup::{GameRng, GameSessionId, GameSetup, MapRng, NumPlayers};
@@ -16,30 +14,23 @@ use crate::unit::{ActionsLegend, UnitMoved, UnitSpawned};
 const CHANNEL_ID: usize = 0;
 
 #[derive(Debug, Resource)]
-pub struct OurPeerId(pub matchbox::PeerId);
+pub struct OurPeerId(pub PeerId);
 
 #[derive(Debug, Resource)]
-pub struct HostId(pub matchbox::PeerId);
+pub struct HostId(pub PeerId);
 
 #[derive(Default, Resource)]
-pub struct SocketRxQueue(pub VecDeque<(matchbox::PeerId, Box<[u8]>)>);
-
-#[derive(Component)]
-pub struct Peer;
+pub struct SocketRxQueue(pub VecDeque<(PeerId, Box<[u8]>)>);
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Component)]
-pub struct PeerId(pub matchbox::PeerId);
-
-#[derive(Bundle)]
-pub struct PeerBundle {
-    peer: Peer,
+pub struct Peer {
     pub peer_id: PeerId,
     pub player_index: PlayerIndex,
 }
 
 #[derive(Copy, Clone, Debug, Deserialize, Event, Serialize)]
 pub struct PeerConnected {
-    pub peer_id: matchbox::PeerId,
+    pub peer_id: PeerId,
     pub player_index: u8,
 }
 
@@ -64,24 +55,6 @@ pub struct ReceiveHostBroadcastSet;
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, SystemSet)]
 pub struct ReceiveRequestSet;
-
-impl From<matchbox::PeerId> for PeerId {
-    fn from(inner: matchbox::PeerId) -> Self {
-        Self(inner)
-    }
-}
-
-#[bon]
-impl PeerBundle {
-    #[builder]
-    pub fn new(peer_id: PeerId, player_index: PlayerIndex) -> Self {
-        Self {
-            peer: Peer,
-            peer_id,
-            player_index,
-        }
-    }
-}
 
 impl From<PeerConnected> for HostBroadcast {
     fn from(inner: PeerConnected) -> Self {
@@ -385,11 +358,11 @@ pub fn dispatch_request(
 pub fn handle_peer_connected(
     mut commands: Commands,
     multiplayer_state: Res<State<MultiplayerState>>,
-    mut peer_query: Query<(&mut PeerId, &PlayerIndex), With<Peer>>,
+    mut peer_query: Query<(&mut Peer,), With<Peer>>,
     mut host_broadcast_events: EventWriter<HostBroadcast>,
     mut peer_connected_events: EventReader<PeerConnected>,
 ) {
-    let mut new_peer_bundles = HashMap::new();
+    let mut new_peers = HashMap::new();
 
     for &peer_connected in peer_connected_events.read() {
         debug!(?peer_connected, "handling peer connected");
@@ -400,22 +373,22 @@ pub fn handle_peer_connected(
 
         let mut updated = false;
 
-        for (mut peer_id, player_index) in peer_query.iter_mut() {
-            if matches!(player_index, &PlayerIndex(s) if s == connected_player_index) {
-                peer_id.set_if_neq(PeerId(connected_peer_id));
+        for (mut peer,) in peer_query.iter_mut() {
+            if matches!(peer.player_index, PlayerIndex(s) if s == connected_player_index) {
+                peer.set_if_neq(Peer {
+                    peer_id: connected_peer_id,
+                    ..*peer
+                });
                 updated = true;
                 break;
             }
         }
 
         if !updated {
-            new_peer_bundles.insert(
-                PlayerIndex(connected_player_index),
-                PeerBundle::builder()
-                    .peer_id(connected_peer_id.into())
-                    .player_index(PlayerIndex(connected_player_index))
-                    .build(),
-            );
+            new_peers.insert(PlayerIndex(connected_player_index), Peer {
+                peer_id: connected_peer_id,
+                player_index: PlayerIndex(connected_player_index),
+            });
         }
 
         if matches!(multiplayer_state.get(), MultiplayerState::Hosting) {
@@ -423,7 +396,7 @@ pub fn handle_peer_connected(
         }
     }
 
-    commands.spawn_batch(new_peer_bundles.into_values());
+    commands.spawn_batch(new_peers.into_values());
 
     commands.run_system_cached(init_our_player);
 }
