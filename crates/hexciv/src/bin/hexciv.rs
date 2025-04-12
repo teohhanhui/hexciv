@@ -18,7 +18,8 @@ use hexciv::player::{spawn_players, OurPlayer};
 use hexciv::state::{GameState, InputDialogState, MultiplayerState, TurnState};
 use hexciv::terrain::{post_spawn_tilemap, spawn_tilemap, upgrade_camera, SpawnTilemapSet};
 use hexciv::turn::{
-    handle_turn_started, mark_turn_in_progress, CurrentTurn, TurnInProgressSet, TurnStarted,
+    enable_global_actions, enable_unit_actions, handle_turn_started, mark_turn_in_progress,
+    CurrentTurn, TurnInProgressSet, TurnStarted,
 };
 use hexciv::unit::{
     cycle_ready_unit, focus_camera_on_active_unit, handle_unit_moved, handle_unit_selected,
@@ -72,19 +73,27 @@ fn main() {
     ))
     .add_plugins(PanCamPlugin)
     .add_plugins(TilemapPlugin)
+    .insert_resource(ClearColor(Srgba::hex("#E9D4B1").unwrap().into()))
     .init_resource::<FontHandle>()
     .init_resource::<ActionState<GameSetupAction>>()
-    .init_resource::<ActionState<GlobalAction>>()
-    .init_resource::<ActionState<UnitAction>>()
+    .insert_resource({
+        let mut action_state: ActionState<GlobalAction> = Default::default();
+        action_state.disable();
+        action_state
+    })
+    .insert_resource({
+        let mut action_state: ActionState<UnitAction> = Default::default();
+        action_state.disable();
+        action_state
+    })
     .init_resource::<ActionState<CursorAction>>()
-    .init_resource::<SocketRxQueue>()
-    .init_resource::<UnitEntityMap>()
-    .init_resource::<CursorPos>()
-    .insert_resource(ClearColor(Srgba::hex("#E9D4B1").unwrap().into()))
     .insert_resource(GameSetupAction::input_map())
     .insert_resource(GlobalAction::input_map())
     .insert_resource(UnitAction::input_map())
     .insert_resource(CursorAction::input_map())
+    .init_resource::<SocketRxQueue>()
+    .init_resource::<CursorPos>()
+    .init_resource::<UnitEntityMap>()
     .init_state::<MultiplayerState>()
     .init_state::<InputDialogState>()
     .init_state::<GameState>()
@@ -142,8 +151,10 @@ fn main() {
         OnEnter(TurnState::InProgress),
         (
             reset_movement_points,
-            cycle_ready_unit.before(handle_unit_selected),
-            focus_camera_on_active_unit.after(handle_unit_selected),
+            cycle_ready_unit,
+            handle_unit_selected,
+            focus_camera_on_active_unit,
+            (enable_global_actions, enable_unit_actions),
         )
             .chain(),
     )

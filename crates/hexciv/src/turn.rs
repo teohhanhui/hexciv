@@ -1,6 +1,8 @@
 use bevy::prelude::*;
+use leafwing_input_manager::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::action::{GlobalAction, UnitAction};
 use crate::peer::HostBroadcast;
 use crate::state::{MultiplayerState, TurnState};
 
@@ -17,6 +19,14 @@ pub struct TurnInProgressSet;
 
 pub fn mark_turn_in_progress(mut next_turn_state: ResMut<NextState<TurnState>>) {
     next_turn_state.set(TurnState::InProgress);
+}
+
+pub fn enable_global_actions(mut action_state: ResMut<ActionState<GlobalAction>>) {
+    action_state.enable();
+}
+
+pub fn enable_unit_actions(mut action_state: ResMut<ActionState<UnitAction>>) {
+    action_state.enable();
 }
 
 /// Handles [`TurnStarted`] events.
