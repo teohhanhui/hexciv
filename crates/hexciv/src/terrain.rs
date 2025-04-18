@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, HashMap};
+use std::iter::zip;
 use std::ops::Add;
 
 use bevy::prelude::*;
+use bevy_ecs_tilemap::helpers::hex_grid::axial::AxialPos;
 use bevy_ecs_tilemap::helpers::hex_grid::neighbors::{HexNeighbors, HEX_DIRECTIONS};
 use bevy_ecs_tilemap::prelude::*;
 use bevy_pancam::{DirectionKeys, PanCam};
@@ -11,6 +13,7 @@ use fastrand_contrib::RngExt as _;
 use itertools::{chain, repeat_n, Itertools as _};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use ordered_float::NotNan;
+use strum::VariantArray;
 
 use crate::game_setup::MapRng;
 use crate::layer::{
@@ -61,22 +64,29 @@ const BOUND_RANGE: Site2D = Site2D {
     y: BOUND_HEIGHT,
 };
 
+/// Offsets of vertices that lie in each [`HexVertexDirection`].
+///
+/// The offsets are in [`Site2D`] coordinates.
 const VERTEX_OFFSETS: [(f32, f32); 6] = [
     (GRID_SIZE.x * 0.5, -GRID_SIZE.y * 0.25),
-    (GRID_SIZE.x * 0.5, GRID_SIZE.y * 0.25),
-    (0.0, GRID_SIZE.y * 0.5),
-    (-GRID_SIZE.x * 0.5, GRID_SIZE.y * 0.25),
-    (-GRID_SIZE.x * 0.5, -GRID_SIZE.y * 0.25),
     (0.0, -GRID_SIZE.y * 0.5),
+    (-GRID_SIZE.x * 0.5, -GRID_SIZE.y * 0.25),
+    (-GRID_SIZE.x * 0.5, GRID_SIZE.y * 0.25),
+    (0.0, GRID_SIZE.y * 0.5),
+    (GRID_SIZE.x * 0.5, GRID_SIZE.y * 0.25),
 ];
 
+/// Offsets to the closest vertex of tiles that lie in each
+/// [`HexVertexDirection`].
+///
+/// The offsets are in [`Site2D`] coordinates.
 const EXTENDED_VERTEX_OFFSETS: [(f32, f32); 6] = [
     (GRID_SIZE.x, -GRID_SIZE.y * 0.5),
-    (GRID_SIZE.x, GRID_SIZE.y * 0.5),
-    (0.0, GRID_SIZE.y),
-    (-GRID_SIZE.x, GRID_SIZE.y * 0.5),
-    (-GRID_SIZE.x, -GRID_SIZE.y * 0.5),
     (0.0, -GRID_SIZE.y),
+    (-GRID_SIZE.x, -GRID_SIZE.y * 0.5),
+    (-GRID_SIZE.x, GRID_SIZE.y * 0.5),
+    (0.0, GRID_SIZE.y),
+    (GRID_SIZE.x, GRID_SIZE.y * 0.5),
 ];
 
 const FRIGID_ZONE_TERRAIN_CHOICES: [BaseTerrain; 2] = [BaseTerrain::Tundra, BaseTerrain::Snow];
@@ -146,7 +156,35 @@ pub enum BaseTerrainVariant {
     Mountains = 10,
 }
 
-pub type RiverEdges = BitArr!(for 6, in u32, Lsb0);
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Component)]
+pub struct River;
+
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Component)]
+pub struct RiverEdge {
+    pub source: TilePos,
+    pub destination_vertex_direction: HexVertexDirection,
+    pub stream_order: StreamOrder,
+}
+
+/// The direction extending outwards from each vertex of a hexagonal tile.
+///
+/// `Zero` corresponds with `NorthEast` for row-oriented tiles.
+///
+/// The vertices are in counter-clockwise order.
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, VariantArray)]
+pub enum HexVertexDirection {
+    Zero,
+    One,
+    Two,
+    Three,
+    Four,
+    Five,
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
+pub struct StreamOrder(pub u8);
+
+pub type RiverHexEdges = BitArr!(for 6, in u32, Lsb0);
 
 #[derive(Copy, Clone, Eq, PartialEq, IntoPrimitive, TryFromPrimitive)]
 #[repr(u32)]
@@ -224,6 +262,10 @@ impl Add<BaseTerrainVariant> for BaseTerrain {
     }
 }
 
+impl River {
+    pub const MIN_LEN: usize = 2;
+}
+
 impl EarthLatitude {
     pub const fn latitude(&self) -> f64 {
         match self {
@@ -233,6 +275,18 @@ impl EarthLatitude {
             Self::AntarcticCircle => -66.57,
         }
     }
+}
+
+impl HexVertexDirection {
+    /// Offsets of tiles that lie in each [`HexVertexDirection`].
+    pub const OFFSETS: [AxialPos; 6] = [
+        AxialPos { q: 2, r: -1 },
+        AxialPos { q: 1, r: 1 },
+        AxialPos { q: -1, r: 2 },
+        AxialPos { q: -2, r: 1 },
+        AxialPos { q: -1, r: -1 },
+        AxialPos { q: 1, r: -2 },
+    ];
 }
 
 /// Generates the initial tilemap.
@@ -380,14 +434,14 @@ pub fn spawn_tilemap(
         let image_map: BTreeMap<u32, Handle<Image>> = repeat_n([true, false].into_iter(), 6)
             .multi_cartesian_product()
             .map(|data| {
-                let mut bits: RiverEdges = BitArray::<_>::ZERO;
+                let mut bits: RiverHexEdges = BitArray::<_>::ZERO;
                 for (i, &v) in data.iter().enumerate() {
                     bits.set(i, v);
                 }
                 (
                     bits.load(),
                     asset_server.load(format!(
-                        "tiles/river-{edges}.png",
+                        "tiles/river/river-{edges}.png",
                         edges = data
                             .iter()
                             .enumerate()
@@ -604,7 +658,7 @@ pub fn post_spawn_tilemap(
         terrain_features_tilemap_query.into_inner();
     let (river_tilemap_entity, mut river_tile_storage) = river_tilemap_query.into_inner();
 
-    let mut river_edges_map: HashMap<TilePos, RiverEdges> = HashMap::new();
+    let mut rivers: Vec<Vec<RiverEdge>> = vec![];
 
     for x in 0..map_size.x {
         for y in 0..map_size.y {
@@ -728,7 +782,7 @@ pub fn post_spawn_tilemap(
             ]
             .contains(&tile_texture.0)
             {
-                let mut elevations: Vec<_> = chain(VERTEX_OFFSETS, EXTENDED_VERTEX_OFFSETS)
+                let mut vertex_elevations: Vec<_> = chain(VERTEX_OFFSETS, EXTENDED_VERTEX_OFFSETS)
                     .map(|(vertex_offset_x, vertex_offset_y)| {
                         let x = BOUND_MIN.x
                             + (f64::from(GRID_SIZE.x) / 2.0
@@ -746,25 +800,33 @@ pub fn post_spawn_tilemap(
                                 + f64::from(vertex_offset_y))
                                 / 100.0;
                         let site = Site2D { x, y };
-                        terrain.get_elevation(&site)
-                    })
-                    .collect();
-                let dest_elevations = elevations.split_off(6);
-                let elevations: Vec<_> = elevations
-                    .into_iter()
-                    .flat_map(|elevation| {
-                        elevation
+                        terrain
+                            .get_elevation(&site)
                             .filter(|elevation| !elevation.is_nan())
                             .map(|elevation| NotNan::new(elevation).unwrap())
                     })
                     .collect();
-                if elevations.len() < 6 {
-                    continue;
-                }
-                let (vertex_min, elevation_min) = {
-                    elevations
-                        .into_iter()
+                let extended_vertex_elevations = vertex_elevations.split_off(6);
+
+                // Limit to a single river edge coming out of each tile, in the direction of the
+                // vertex with the lowest elevation.
+                let Some((vertex_min, _elevation_min)) =
+                    zip(vertex_elevations, extended_vertex_elevations.iter())
                         .enumerate()
+                        .filter_map(|(i, (elevation, dest_elevation))| {
+                            if let (Some(elevation), &Some(dest_elevation)) =
+                                (elevation, dest_elevation)
+                            {
+                                // Avoid creating river edges going to the same or higher elevation.
+                                if dest_elevation > elevation {
+                                    Some((i, elevation))
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        })
                         .reduce(|(vertex_min, elevation_min), (i, elevation)| {
                             let elevation_min = elevation_min.min(elevation);
                             let vertex_min = if elevation_min == elevation {
@@ -774,22 +836,12 @@ pub fn post_spawn_tilemap(
                             };
                             (vertex_min, elevation_min)
                         })
-                        .unwrap()
-                };
-                let Some(dest_elevation) = dest_elevations[vertex_min] else {
+                else {
                     continue;
                 };
-                if dest_elevation.is_nan() {
-                    continue;
-                }
-                let dest_elevation = NotNan::new(dest_elevation).unwrap();
-                if elevation_min <= dest_elevation {
-                    // Avoid creating river edges going to the same or higher elevation.
-                    continue;
-                }
 
-                let edge_a = (vertex_min + 5) % 6;
-                let edge_b = vertex_min;
+                let edge_a = vertex_min;
+                let edge_b = (edge_a + 1) % 6;
                 if let Some(edge_adjacent_tile_entity) =
                     neighbor_entities.get(HEX_DIRECTIONS[edge_a])
                 {
@@ -817,30 +869,183 @@ pub fn post_spawn_tilemap(
                     }
                 }
 
-                if let Some(tile_pos) = neighbor_positions.get(HEX_DIRECTIONS[edge_a]) {
-                    let river_edges = river_edges_map
-                        .entry(*tile_pos)
-                        .or_insert(BitArray::<_>::ZERO);
-                    let river_edge = (edge_a + 2) % 6;
-                    river_edges.set(river_edge, true);
+                let (tile_pos_a, tile_pos_b) = (
+                    neighbor_positions.get(HEX_DIRECTIONS[edge_a]),
+                    neighbor_positions.get(HEX_DIRECTIONS[edge_b]),
+                );
+                if tile_pos_a.is_none() && tile_pos_b.is_none() {
+                    // Avoid creating river edges sticking out from the map.
+                    continue;
                 }
-                if let Some(tile_pos) = neighbor_positions.get(HEX_DIRECTIONS[edge_b]) {
-                    let river_edges = river_edges_map
-                        .entry(*tile_pos)
-                        .or_insert(BitArray::<_>::ZERO);
-                    let river_edge = (edge_b + 4) % 6;
-                    river_edges.set(river_edge, true);
+
+                let vertex_direction = HexVertexDirection::VARIANTS[vertex_min];
+
+                if rivers.iter().any(|river_edges| {
+                    river_edges.iter().any(
+                        |&RiverEdge {
+                             source,
+                             destination_vertex_direction,
+                             ..
+                         }| {
+                            source == tile_pos && destination_vertex_direction == vertex_direction
+                        },
+                    )
+                }) {
+                    // Skip if river edge already exists.
+                    continue;
                 }
+
+                let new_river_edge = RiverEdge {
+                    source: tile_pos,
+                    destination_vertex_direction: vertex_direction,
+                    stream_order: StreamOrder(1),
+                };
+                let mut inserted = false;
+
+                // Check for existing river edges to append to.
+                if let Some(_tile_pos_a) = tile_pos_a {
+                    let edge_a_mirrored = (edge_a + 2) % 6;
+                    if let Some(&tile_pos_a_mirrored) =
+                        neighbor_positions.get(HEX_DIRECTIONS[edge_a_mirrored])
+                    {
+                        let vertex_direction = HexVertexDirection::VARIANTS[(edge_a + 5) % 6];
+                        for river_edges in rivers.iter_mut() {
+                            let Some(pos) = river_edges.iter().position(
+                                |&RiverEdge {
+                                     source,
+                                     destination_vertex_direction,
+                                     ..
+                                 }| {
+                                    source == tile_pos_a_mirrored
+                                        && destination_vertex_direction == vertex_direction
+                                },
+                            ) else {
+                                continue;
+                            };
+                            river_edges.splice((pos + 1)..(pos + 1), [new_river_edge]);
+                            inserted = true;
+                        }
+                    }
+                }
+                if let Some(_tile_pos_b) = tile_pos_b {
+                    let edge_b_mirrored = (edge_b + 4) % 6;
+                    if let Some(&tile_pos_b_mirrored) =
+                        neighbor_positions.get(HEX_DIRECTIONS[edge_b_mirrored])
+                    {
+                        let vertex_direction = HexVertexDirection::VARIANTS[edge_b];
+                        for river_edges in rivers.iter_mut() {
+                            let Some(pos) = river_edges.iter().position(
+                                |&RiverEdge {
+                                     source,
+                                     destination_vertex_direction,
+                                     ..
+                                 }| {
+                                    source == tile_pos_b_mirrored
+                                        && destination_vertex_direction == vertex_direction
+                                },
+                            ) else {
+                                continue;
+                            };
+                            river_edges.splice((pos + 1)..(pos + 1), [new_river_edge]);
+                            inserted = true;
+                        }
+                    }
+                }
+
+                // Check for existing river edges to prepend to.
+                if let Some(&tile_pos_a) = tile_pos_a {
+                    let vertex_direction = HexVertexDirection::VARIANTS[(edge_a + 1) % 6];
+                    for river_edges in rivers.iter_mut() {
+                        let Some(pos) = river_edges.iter().position(
+                            |&RiverEdge {
+                                 source,
+                                 destination_vertex_direction,
+                                 ..
+                             }| {
+                                source == tile_pos_a
+                                    && destination_vertex_direction == vertex_direction
+                            },
+                        ) else {
+                            continue;
+                        };
+                        river_edges.splice(pos..pos, [new_river_edge]);
+                        inserted = true;
+                    }
+                }
+                if let Some(&tile_pos_b) = tile_pos_b {
+                    let vertex_direction = HexVertexDirection::VARIANTS[(edge_b + 4) % 6];
+                    for river_edges in rivers.iter_mut() {
+                        let Some(pos) = river_edges.iter().position(
+                            |&RiverEdge {
+                                 source,
+                                 destination_vertex_direction,
+                                 ..
+                             }| {
+                                source == tile_pos_b
+                                    && destination_vertex_direction == vertex_direction
+                            },
+                        ) else {
+                            continue;
+                        };
+                        river_edges.splice(pos..pos, [new_river_edge]);
+                        inserted = true;
+                    }
+                }
+
+                if !inserted {
+                    rivers.push(vec![new_river_edge]);
+                }
+
+                // TODO: Merge streams if the new river edge is at a confluence
+                // with an existing river edge.
             }
         }
     }
 
-    for (tile_pos, river_edges) in river_edges_map {
+    // Remove rivers which are too short.
+    rivers.retain(|river_edges| river_edges.len() >= River::MIN_LEN);
+
+    debug!(?rivers, "generated rivers");
+
+    let mut river_hex_edges_map: HashMap<TilePos, RiverHexEdges> = HashMap::new();
+
+    for river_edges in rivers {
+        for RiverEdge {
+            source,
+            destination_vertex_direction,
+            ..
+        } in river_edges
+        {
+            let neighbor_positions =
+                HexNeighbors::get_neighboring_positions_row_odd(&source, map_size);
+
+            let edge_a = destination_vertex_direction as usize;
+            let edge_b = (edge_a + 1) % 6;
+
+            if let Some(tile_pos) = neighbor_positions.get(HEX_DIRECTIONS[edge_a]) {
+                let river_hex_edges = river_hex_edges_map
+                    .entry(*tile_pos)
+                    .or_insert(BitArray::<_>::ZERO);
+                let river_edge = (edge_a + 2) % 6;
+                river_hex_edges.set(river_edge, true);
+            }
+
+            if let Some(tile_pos) = neighbor_positions.get(HEX_DIRECTIONS[edge_b]) {
+                let river_hex_edges = river_hex_edges_map
+                    .entry(*tile_pos)
+                    .or_insert(BitArray::<_>::ZERO);
+                let river_edge = (edge_b + 4) % 6;
+                river_hex_edges.set(river_edge, true);
+            }
+        }
+    }
+
+    for (tile_pos, river_hex_edges) in river_hex_edges_map {
         let tile_entity = commands
             .spawn(TileBundle {
                 position: tile_pos,
                 tilemap_id: TilemapId(river_tilemap_entity),
-                texture_index: TileTextureIndex(river_edges.load()),
+                texture_index: TileTextureIndex(river_hex_edges.load()),
                 ..Default::default()
             })
             .insert(RiverLayer)

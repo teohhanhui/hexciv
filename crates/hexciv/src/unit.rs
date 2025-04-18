@@ -35,7 +35,7 @@ use crate::layer::{
 use crate::peer::{HostBroadcast, Request};
 use crate::player::{OurPlayer, Player};
 use crate::state::{MultiplayerState, TurnState};
-use crate::terrain::{BaseTerrain, RiverEdges, TerrainFeatures};
+use crate::terrain::{BaseTerrain, RiverHexEdges, TerrainFeatures};
 use crate::turn::TurnStarted;
 
 /// A map from [`UnitId`] to [`Entity`] ID.
@@ -824,13 +824,13 @@ pub fn move_active_unit_to(
                     .map(|tile_pos| (direction, *tile_pos))
             })
             .collect();
-        let river_edges: RiverEdges = river_tile_storage
+        let river_hex_edges: RiverHexEdges = river_tile_storage
             .get(&tile_pos)
             .map(|tile_entity| river_tile_query.get(tile_entity).unwrap())
             .map_or(BitArray::<_>::ZERO, |(tile_texture,)| {
-                let mut river_edges: RiverEdges = BitArray::<_>::ZERO;
-                river_edges.store(tile_texture.0);
-                river_edges
+                let mut river_hex_edges: RiverHexEdges = BitArray::<_>::ZERO;
+                river_hex_edges.store(tile_texture.0);
+                river_hex_edges
             });
 
         neighbor_positions_map.into_iter().filter_map({
@@ -885,7 +885,7 @@ pub fn move_active_unit_to(
                         _ => NotNan::from(1),
                     }
                 };
-                let movement_cost = if river_edges[direction as usize] {
+                let movement_cost = if river_hex_edges[direction as usize] {
                     movement_cost + NotNan::from(3)
                 } else {
                     movement_cost
