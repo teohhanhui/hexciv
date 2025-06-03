@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap};
+use std::error::Error;
 use std::iter::zip;
 use std::ops::Add;
 
@@ -8,6 +9,7 @@ use bevy_ecs_tilemap::helpers::hex_grid::neighbors::{HexNeighbors, HEX_DIRECTION
 use bevy_ecs_tilemap::prelude::*;
 use bevy_pancam::{DirectionKeys, PanCam};
 use bitvec::prelude::*;
+use derive_more::Display;
 use fastlem_random_terrain::{generate_terrain, Site2D, Terrain2D};
 use fastrand_contrib::RngExt as _;
 use itertools::{chain, repeat_n, Itertools as _};
@@ -161,8 +163,8 @@ pub struct River;
 
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Component)]
 pub struct RiverEdge {
-    pub source: TilePos,
-    pub destination_vertex_direction: HexVertexDirection,
+    pub source: AxialPos,
+    pub destination: AxialPos,
     pub stream_order: StreamOrder,
 }
 
@@ -179,6 +181,12 @@ pub enum HexVertexDirection {
     Three,
     Four,
     Five,
+}
+
+#[derive(Debug, Display)]
+pub enum HexVertexDirectionError {
+    #[display("invalid offset")]
+    InvalidOffset,
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
@@ -277,16 +285,42 @@ impl EarthLatitude {
     }
 }
 
+impl TryFrom<(AxialPos, AxialPos)> for HexVertexDirection {
+    type Error = HexVertexDirectionError;
+
+    fn try_from((a, b): (AxialPos, AxialPos)) -> Result<Self, Self::Error> {
+        let offset_pos = Self::OFFSETS
+            .iter()
+            .position(|&offset| offset == (b - a))
+            .ok_or(Self::Error::InvalidOffset)?;
+        Ok(Self::VARIANTS[offset_pos])
+    }
+}
+
 impl HexVertexDirection {
     /// Offsets of tiles that lie in each [`HexVertexDirection`].
     pub const OFFSETS: [AxialPos; 6] = [
-        AxialPos { q: 2, r: -1 },
         AxialPos { q: 1, r: 1 },
         AxialPos { q: -1, r: 2 },
         AxialPos { q: -2, r: 1 },
         AxialPos { q: -1, r: -1 },
         AxialPos { q: 1, r: -2 },
+        AxialPos { q: 2, r: -1 },
     ];
+}
+
+impl Error for HexVertexDirectionError {}
+
+impl Add for StreamOrder {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        if self.0 == rhs.0 {
+            Self(self.0 + 1)
+        } else {
+            self.max(rhs)
+        }
+    }
 }
 
 /// Generates the initial tilemap.
@@ -658,7 +692,7 @@ pub fn post_spawn_tilemap(
         terrain_features_tilemap_query.into_inner();
     let (river_tilemap_entity, mut river_tile_storage) = river_tilemap_query.into_inner();
 
-    let mut rivers: Vec<Vec<RiverEdge>> = vec![];
+    let mut river_edges: Vec<RiverEdge> = vec![];
 
     for x in 0..map_size.x {
         for y in 0..map_size.y {
@@ -878,148 +912,188 @@ pub fn post_spawn_tilemap(
                     continue;
                 }
 
-                let vertex_direction = HexVertexDirection::VARIANTS[vertex_min];
+                let source =
+                    AxialPos::from_tile_pos_given_coord_system(&tile_pos, HexCoordSystem::RowOdd);
+                let destination = source + HexVertexDirection::OFFSETS[edge_a];
 
-                if rivers.iter().any(|river_edges| {
-                    river_edges.iter().any(
-                        |&RiverEdge {
-                             source,
-                             destination_vertex_direction,
-                             ..
-                         }| {
-                            source == tile_pos && destination_vertex_direction == vertex_direction
-                        },
-                    )
+                if river_edges.iter().any(|river_edge| {
+                    river_edge.source == source && river_edge.destination == destination
                 }) {
                     // Skip if river edge already exists.
                     continue;
                 }
 
                 let new_river_edge = RiverEdge {
-                    source: tile_pos,
-                    destination_vertex_direction: vertex_direction,
+                    source,
+                    destination,
                     stream_order: StreamOrder(1),
                 };
-                let mut inserted = false;
+                river_edges.push(new_river_edge);
 
-                // Check for existing river edges to append to.
-                if let Some(_tile_pos_a) = tile_pos_a {
-                    let edge_a_mirrored = (edge_a + 2) % 6;
-                    if let Some(&tile_pos_a_mirrored) =
-                        neighbor_positions.get(HEX_DIRECTIONS[edge_a_mirrored])
-                    {
-                        let vertex_direction = HexVertexDirection::VARIANTS[(edge_a + 5) % 6];
-                        for river_edges in rivers.iter_mut() {
-                            let Some(pos) = river_edges.iter().position(
-                                |&RiverEdge {
-                                     source,
-                                     destination_vertex_direction,
-                                     ..
-                                 }| {
-                                    source == tile_pos_a_mirrored
-                                        && destination_vertex_direction == vertex_direction
-                                },
-                            ) else {
-                                continue;
-                            };
-                            river_edges.splice((pos + 1)..(pos + 1), [new_river_edge]);
-                            inserted = true;
+                // Recursively merge streams if the new river edge is at a
+                // confluence with an existing river edge.
+                let mut new_river_edge = Some(new_river_edge);
+                while let Some(RiverEdge {
+                    source,
+                    destination,
+                    stream_order,
+                    ..
+                }) = new_river_edge.take()
+                {
+                    let tile_pos = source.as_tile_pos_given_coord_system(HexCoordSystem::RowOdd);
+                    let vertex_direction: HexVertexDirection = (source, destination)
+                        .try_into()
+                        .expect("`(source, destination)` should match a valid offset");
+                    let neighbor_positions =
+                        HexNeighbors::get_neighboring_positions_row_odd(&tile_pos, map_size);
+                    let edge_a = vertex_direction as usize;
+                    let edge_b = (edge_a + 1) % 6;
+
+                    if let Some(&tile_pos_a) = neighbor_positions.get(HEX_DIRECTIONS[edge_a]) {
+                        let axial_pos_a = AxialPos::from_tile_pos_given_coord_system(
+                            &tile_pos_a,
+                            HexCoordSystem::RowOdd,
+                        );
+                        let neighbor_positions =
+                            HexNeighbors::get_neighboring_positions_row_odd(&tile_pos_a, map_size);
+                        if let Some(&tile_pos_aa) = neighbor_positions.get(HEX_DIRECTIONS[edge_a]) {
+                            let axial_pos_aa = AxialPos::from_tile_pos_given_coord_system(
+                                &tile_pos_aa,
+                                HexCoordSystem::RowOdd,
+                            );
+                            let confluence_destination =
+                                source + HexVertexDirection::OFFSETS[(edge_a + 2) % 6];
+                            debug!(
+                                ?tile_pos,
+                                ?vertex_direction,
+                                ?tile_pos_a,
+                                ?axial_pos_a,
+                                ?tile_pos_aa,
+                                ?axial_pos_aa,
+                                ?confluence_destination,
+                                "checking for river confluence"
+                            );
+                            if let Some(confluence_river_edge) =
+                                river_edges.iter().find(|river_edge| {
+                                    river_edge.source == axial_pos_aa
+                                        && river_edge.destination == confluence_destination
+                                })
+                            {
+                                // debug!(?confluence_river_edge, "found river confluence");
+                                let merged_destination =
+                                    source + HexVertexDirection::OFFSETS[(edge_a + 1) % 6];
+                                if river_edges.iter().any(|river_edge| {
+                                    river_edge.source == axial_pos_a
+                                        && river_edge.destination == merged_destination
+                                }) {
+                                    // Skip if river edge already exists.
+                                    continue;
+                                }
+
+                                let merged_stream_order =
+                                    stream_order + confluence_river_edge.stream_order;
+                                let river_edge = RiverEdge {
+                                    source: axial_pos_a,
+                                    destination: merged_destination,
+                                    stream_order: merged_stream_order,
+                                };
+                                river_edges.push(river_edge);
+                                new_river_edge = Some(river_edge);
+                            }
+                        }
+                    }
+
+                    if let Some(&tile_pos_b) = neighbor_positions.get(HEX_DIRECTIONS[edge_b]) {
+                        let axial_pos_b = AxialPos::from_tile_pos_given_coord_system(
+                            &tile_pos_b,
+                            HexCoordSystem::RowOdd,
+                        );
+                        let neighbor_positions =
+                            HexNeighbors::get_neighboring_positions_row_odd(&tile_pos_b, map_size);
+                        if let Some(&tile_pos_bb) = neighbor_positions.get(HEX_DIRECTIONS[edge_b]) {
+                            let axial_pos_bb = AxialPos::from_tile_pos_given_coord_system(
+                                &tile_pos_bb,
+                                HexCoordSystem::RowOdd,
+                            );
+                            let confluence_destination =
+                                source + HexVertexDirection::OFFSETS[(edge_b + 3) % 6];
+                            // debug!(
+                            //     ?tile_pos,
+                            //     ?vertex_direction,
+                            //     ?tile_pos_b,
+                            //     ?axial_pos_b,
+                            //     ?tile_pos_bb,
+                            //     ?axial_pos_bb,
+                            //     ?confluence_destination,
+                            //     "checking for river confluence"
+                            // );
+                            if let Some(confluence_river_edge) =
+                                river_edges.iter().find(|river_edge| {
+                                    river_edge.source == axial_pos_bb
+                                        && river_edge.destination == confluence_destination
+                                })
+                            {
+                                // debug!(?confluence_river_edge, "found river confluence");
+                                let merged_destination =
+                                    source + HexVertexDirection::OFFSETS[(edge_b + 4) % 6];
+                                if river_edges.iter().any(|river_edge| {
+                                    river_edge.source == axial_pos_b
+                                        && river_edge.destination == merged_destination
+                                }) {
+                                    // Skip if river edge already exists.
+                                    continue;
+                                }
+
+                                let merged_stream_order =
+                                    stream_order + confluence_river_edge.stream_order;
+                                let river_edge = RiverEdge {
+                                    source: axial_pos_b,
+                                    destination: merged_destination,
+                                    stream_order: merged_stream_order,
+                                };
+                                river_edges.push(river_edge);
+                                new_river_edge = Some(river_edge);
+                            }
                         }
                     }
                 }
-                if let Some(_tile_pos_b) = tile_pos_b {
-                    let edge_b_mirrored = (edge_b + 4) % 6;
-                    if let Some(&tile_pos_b_mirrored) =
-                        neighbor_positions.get(HEX_DIRECTIONS[edge_b_mirrored])
-                    {
-                        let vertex_direction = HexVertexDirection::VARIANTS[edge_b];
-                        for river_edges in rivers.iter_mut() {
-                            let Some(pos) = river_edges.iter().position(
-                                |&RiverEdge {
-                                     source,
-                                     destination_vertex_direction,
-                                     ..
-                                 }| {
-                                    source == tile_pos_b_mirrored
-                                        && destination_vertex_direction == vertex_direction
-                                },
-                            ) else {
-                                continue;
-                            };
-                            river_edges.splice((pos + 1)..(pos + 1), [new_river_edge]);
-                            inserted = true;
-                        }
-                    }
-                }
-
-                // Check for existing river edges to prepend to.
-                if let Some(&tile_pos_a) = tile_pos_a {
-                    let vertex_direction = HexVertexDirection::VARIANTS[(edge_a + 1) % 6];
-                    for river_edges in rivers.iter_mut() {
-                        let Some(pos) = river_edges.iter().position(
-                            |&RiverEdge {
-                                 source,
-                                 destination_vertex_direction,
-                                 ..
-                             }| {
-                                source == tile_pos_a
-                                    && destination_vertex_direction == vertex_direction
-                            },
-                        ) else {
-                            continue;
-                        };
-                        river_edges.splice(pos..pos, [new_river_edge]);
-                        inserted = true;
-                    }
-                }
-                if let Some(&tile_pos_b) = tile_pos_b {
-                    let vertex_direction = HexVertexDirection::VARIANTS[(edge_b + 4) % 6];
-                    for river_edges in rivers.iter_mut() {
-                        let Some(pos) = river_edges.iter().position(
-                            |&RiverEdge {
-                                 source,
-                                 destination_vertex_direction,
-                                 ..
-                             }| {
-                                source == tile_pos_b
-                                    && destination_vertex_direction == vertex_direction
-                            },
-                        ) else {
-                            continue;
-                        };
-                        river_edges.splice(pos..pos, [new_river_edge]);
-                        inserted = true;
-                    }
-                }
-
-                if !inserted {
-                    rivers.push(vec![new_river_edge]);
-                }
-
-                // TODO: Merge streams if the new river edge is at a confluence
-                // with an existing river edge.
             }
         }
     }
 
-    // Remove rivers which are too short.
-    rivers.retain(|river_edges| river_edges.len() >= River::MIN_LEN);
+    let mut grouped_river_edges: Vec<Vec<RiverEdge>> = vec![];
 
-    debug!(?rivers, "generated rivers");
+    let mut river_edges: Vec<Option<RiverEdge>> = river_edges.into_iter().map(Some).collect();
+
+    // Recursively group adjacent river edges.
+    for river_edge in river_edges.iter_mut() {
+        // TODO: Actually perform grouping.
+        grouped_river_edges.push(vec![river_edge.take().unwrap()]);
+    }
+
+    // Remove rivers which are too short.
+    // grouped_river_edges.retain(|river_edges| river_edges.len() >=
+    // River::MIN_LEN);
+
+    // debug!(?grouped_river_edges, "generated rivers");
 
     let mut river_hex_edges_map: HashMap<TilePos, RiverHexEdges> = HashMap::new();
 
-    for river_edges in rivers {
+    for river_edges in grouped_river_edges {
         for RiverEdge {
             source,
-            destination_vertex_direction,
+            destination,
             ..
         } in river_edges
         {
+            let tile_pos = source.as_tile_pos_given_coord_system(HexCoordSystem::RowOdd);
+            let vertex_direction: HexVertexDirection = (source, destination)
+                .try_into()
+                .expect("`(source, destination)` should match a valid offset");
             let neighbor_positions =
-                HexNeighbors::get_neighboring_positions_row_odd(&source, map_size);
+                HexNeighbors::get_neighboring_positions_row_odd(&tile_pos, map_size);
 
-            let edge_a = destination_vertex_direction as usize;
+            let edge_a = vertex_direction as usize;
             let edge_b = (edge_a + 1) % 6;
 
             if let Some(tile_pos) = neighbor_positions.get(HEX_DIRECTIONS[edge_a]) {
