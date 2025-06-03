@@ -40,11 +40,19 @@ pub fn update_cursor_tile_pos(
     mut commands: Commands,
     cursor_pos: Res<CursorPos>,
     tilemap_query: Single<
-        (&TilemapSize, &TilemapGridSize, &TilemapType, &Transform),
+        (
+            &Transform,
+            &TilemapType,
+            &TilemapSize,
+            &TilemapAnchor,
+            &TilemapGridSize,
+            &TilemapTileSize,
+        ),
         BaseTerrainLayerFilter,
     >,
 ) {
-    let (map_size, grid_size, map_type, map_transform) = tilemap_query.into_inner();
+    let (map_transform, map_type, map_size, map_anchor, grid_size, tile_size) =
+        tilemap_query.into_inner();
     // Grab the cursor position from the `Res<CursorPos>`
     let cursor_pos: Vec2 = cursor_pos.0;
     // We need to make sure that the cursor's world position is correct relative to
@@ -57,9 +65,14 @@ pub fn update_cursor_tile_pos(
     };
     // Once we have a world position we can transform it into a possible tile
     // position.
-    if let Some(tile_pos) =
-        TilePos::from_world_pos(&cursor_in_map_pos, map_size, grid_size, map_type)
-    {
+    if let Some(tile_pos) = TilePos::from_world_pos(
+        &cursor_in_map_pos,
+        map_size,
+        grid_size,
+        tile_size,
+        map_type,
+        map_anchor,
+    ) {
         commands.insert_resource(CursorTilePos(tile_pos));
     } else {
         // Cursor is not hovering over any tile.

@@ -5,29 +5,29 @@ members = ["crates/*"]
 [workspace.package]
 version = "0.1.0"
 authors = ["Teoh Han Hui <teohhanhui@gmail.com>"]
-edition = "2021"
-rust-version = "1.80.1"
+edition = "2024"
+rust-version = "1.85.1"
 description = "Civ VI inspired game"
 repository = "https://github.com/teohhanhui/hexciv"
 license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
-bevy = { version = "0.15.3", default-features = false }
-bevy_ecs_tilemap = { version = "0.15.0", default-features = false }
-bevy_matchbox = { version = "0.11.0", default-features = false }
-bevy_pancam = { version = "0.17.0", default-features = false }
-bevy_simple_text_input = { version = "0.10.2", default-features = false }
+bevy = { version = "0.16.1", default-features = false }
+bevy_ecs_tilemap = { version = "0.16.0", default-features = false }
+bevy_matchbox = { version = "0.12.0", default-features = false }
+bevy_pancam = { version = "0.18.0", default-features = false }
+bevy_simple_text_input = { version = "0.11.1", default-features = false }
 bitvec = { version = "1.0.1", default-features = false }
-bon = { version = "3.5.0", default-features = false }
+bon = { version = "3.6.3", default-features = false }
 derive_more = { version = "2.0.1", default-features = false }
 fastlem = { version = "0.1.4", default-features = false }
 fastlem-random-terrain = { path = "crates/fastlem-random-terrain", default-features = false }
 fastrand = { version = "2.3.0", default-features = false }
 fastrand-contrib = { version = "0.1.0", default-features = false }
-indexmap = { version = "2.8.0", default-features = false }
+indexmap = { version = "2.9.0", default-features = false }
 itertools = { version = "0.14.0", default-features = false }
-leafwing-input-manager = { version = "0.16.0", default-features = false }
-log = { version = "0.4.26", default-features = false }
+leafwing-input-manager = { version = "0.17.0", default-features = false }
+log = { version = "0.4.27", default-features = false }
 noise = { version = "0.9.0", default-features = false }
 num_enum = { version = "0.7.3", default-features = false }
 ordered-float = { version = "5.0.0", default-features = false }
@@ -37,7 +37,7 @@ serde_json = { version = "1.0.140", default-features = false }
 strum = { version = "0.27.1", default-features = false }
 terrain-graph = { version = "1.0.1", default-features = false }
 tracing = { version = "0.1.41", default-features = false }
-uuid = { version = "1.12.1", default-features = false }
+uuid = { version = "1.17.0", default-features = false }
 
 [workspace.lints.clippy]
 arithmetic_side_effects = "warn"

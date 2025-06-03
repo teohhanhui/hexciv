@@ -6,7 +6,7 @@ use bevy_matchbox::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::game_setup::{GameRng, GameSessionId, GameSetup, MapRng, NumPlayers};
-use crate::player::{init_our_player, PlayerIndex};
+use crate::player::{PlayerIndex, init_our_player};
 use crate::state::{GameState, MultiplayerState};
 use crate::turn::TurnStarted;
 use crate::unit::{ActionsLegend, UnitMoved, UnitSpawned};
@@ -167,7 +167,7 @@ pub fn wait_for_peers(
                 channel.send(game_setup_message.clone().into(), peer_id);
             }
             for (i, peer_id) in iter::once(host_id).chain(peers).enumerate() {
-                peer_connected_events.send(PeerConnected {
+                peer_connected_events.write(PeerConnected {
                     peer_id,
                     player_index: i.try_into().unwrap(),
                 });
@@ -251,7 +251,7 @@ pub fn receive_host_broadcast(
         let host_broadcast: HostBroadcast = serde_json::from_slice(&message)
             .expect("deserializing host broadcast event should not fail");
         debug!(?host_broadcast, host_id = ?host_id.0, our_peer_id = ?our_peer_id.0, "received host broadcast");
-        host_broadcast_events.send(host_broadcast);
+        host_broadcast_events.write(host_broadcast);
     }
 }
 
@@ -272,16 +272,16 @@ pub fn dispatch_host_broadcast(
     for host_broadcast in host_broadcast_events.read() {
         match *host_broadcast {
             HostBroadcast::PeerConnected(peer_connected) => {
-                peer_connected_events.send(peer_connected);
+                peer_connected_events.write(peer_connected);
             },
             HostBroadcast::TurnStarted(turn_started) => {
-                turn_started_events.send(turn_started);
+                turn_started_events.write(turn_started);
             },
             HostBroadcast::UnitSpawned(unit_spawned) => {
-                unit_spawned_events.send(unit_spawned);
+                unit_spawned_events.write(unit_spawned);
             },
             HostBroadcast::UnitMoved(unit_moved) => {
-                unit_moved_events.send(unit_moved);
+                unit_moved_events.write(unit_moved);
             },
         }
     }
@@ -326,7 +326,7 @@ pub fn receive_request(
         let request: Request =
             serde_json::from_slice(&message).expect("deserializing request event should not fail");
         debug!(?request, their_peer_id = ?peer_id, our_peer_id = ?our_peer_id.0, "received request");
-        request_events.send(request);
+        request_events.write(request);
     }
 }
 
@@ -345,10 +345,10 @@ pub fn dispatch_request(
     for request in request_events.read() {
         match *request {
             Request::UnitSpawned(unit_spawned) => {
-                unit_spawned_events.send(unit_spawned);
+                unit_spawned_events.write(unit_spawned);
             },
             Request::UnitMoved(unit_moved) => {
-                unit_moved_events.send(unit_moved);
+                unit_moved_events.write(unit_moved);
             },
         }
     }
@@ -392,7 +392,7 @@ pub fn handle_peer_connected(
         }
 
         if matches!(multiplayer_state.get(), MultiplayerState::Hosting) {
-            host_broadcast_events.send(peer_connected.into());
+            host_broadcast_events.write(peer_connected.into());
         }
     }
 

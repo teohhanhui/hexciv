@@ -6,27 +6,27 @@ use bevy_pancam::PanCamPlugin;
 use hexciv::action::{CursorAction, GameSetupAction, GlobalAction, UnitAction};
 use hexciv::asset::FontHandle;
 use hexciv::dev_tools::TileLabelPlugin;
-use hexciv::game_setup::{host_game, join_game, GameSetupSet, HostingSet, InGameSet, JoiningSet};
-use hexciv::input::{update_cursor_pos, update_cursor_tile_pos, CursorPos, CursorTilePos};
+use hexciv::game_setup::{GameSetupSet, HostingSet, InGameSet, JoiningSet, host_game, join_game};
+use hexciv::input::{CursorPos, CursorTilePos, update_cursor_pos, update_cursor_tile_pos};
 use hexciv::input_dialog::InputDialogPlugin;
 use hexciv::peer::{
-    dispatch_host_broadcast, dispatch_request, handle_peer_connected, receive_host_broadcast,
-    receive_request, send_host_broadcast, send_request, wait_for_peers, HostBroadcast, HostId,
-    OurPeerId, PeerConnected, ReceiveHostBroadcastSet, ReceiveRequestSet, Request, SocketRxQueue,
+    HostBroadcast, HostId, OurPeerId, PeerConnected, ReceiveHostBroadcastSet, ReceiveRequestSet,
+    Request, SocketRxQueue, dispatch_host_broadcast, dispatch_request, handle_peer_connected,
+    receive_host_broadcast, receive_request, send_host_broadcast, send_request, wait_for_peers,
 };
-use hexciv::player::{spawn_players, OurPlayer};
+use hexciv::player::{OurPlayer, spawn_players};
 use hexciv::state::{GameState, InputDialogState, MultiplayerState, TurnState};
-use hexciv::terrain::{post_spawn_tilemap, spawn_tilemap, upgrade_camera, SpawnTilemapSet};
+use hexciv::terrain::{SpawnTilemapSet, post_spawn_tilemap, spawn_tilemap, upgrade_camera};
 use hexciv::turn::{
-    enable_global_actions, enable_unit_actions, handle_turn_started, mark_turn_in_progress,
-    CurrentTurn, TurnInProgressSet, TurnStarted,
+    CurrentTurn, TurnInProgressSet, TurnStarted, enable_global_actions, enable_unit_actions,
+    handle_turn_started, mark_turn_in_progress,
 };
 use hexciv::unit::{
-    cycle_ready_unit, focus_camera_on_active_unit, handle_unit_moved, handle_unit_selected,
-    handle_unit_spawned, has_ready_units, mark_active_unit_fortified,
-    mark_active_unit_out_of_orders, move_active_unit_to, reset_movement_points, select_unit,
-    should_move_active_unit_to, spawn_starting_units, ActionsLegend, UnitEntityMap, UnitMoved,
-    UnitSelected, UnitSpawned,
+    ActionsLegend, UnitEntityMap, UnitMoved, UnitSelected, UnitSpawned, cycle_ready_unit,
+    focus_camera_on_active_unit, handle_unit_moved, handle_unit_selected, handle_unit_spawned,
+    has_ready_units, mark_active_unit_fortified, mark_active_unit_out_of_orders,
+    move_active_unit_to, reset_movement_points, select_unit, should_move_active_unit_to,
+    spawn_starting_units,
 };
 use leafwing_input_manager::common_conditions::action_just_pressed;
 use leafwing_input_manager::prelude::*;

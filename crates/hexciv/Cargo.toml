@@ -37,6 +37,7 @@ uuid = { workspace = true, features = ["serde", "std", "v4", "v7"] }
 [dependencies.bevy]
 workspace = true
 features = [
+    "async_executor",
     "bevy_asset",
     "bevy_color",
     "bevy_core_pipeline",
@@ -49,23 +50,24 @@ features = [
     "bevy_winit",
     "multi_threaded",
     "png",
+    "std",
     "sysinfo_plugin",
     "wayland",
     "webgl2",
     "x11",
 ]
 
-# [dependencies.getrandom_v02]
-# package = "getrandom"
-# version = "0.2.15"
-# default-features = false
-# features = ["js"]
+[dependencies.getrandom_v02]
+package = "getrandom"
+version = "0.2.15"
+default-features = false
+features = ["js"]
 
-# [dependencies.getrandom_v03]
-# package = "getrandom"
-# version = "0.3.2"
-# default-features = false
-# features = ["wasm_js"]
+[dependencies.getrandom_v03]
+package = "getrandom"
+version = "0.3.2"
+default-features = false
+features = ["wasm_js"]
 
 [features]
 default = ["dev"]

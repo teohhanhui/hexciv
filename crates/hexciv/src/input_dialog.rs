@@ -75,7 +75,7 @@ fn show_input_dialog(mut commands: Commands, font_handle: Res<FontHandle>) {
 }
 
 fn hide_input_dialog(mut commands: Commands, input_dialog: Res<InputDialog>) {
-    commands.entity(input_dialog.0).despawn_recursive();
+    commands.entity(input_dialog.0).despawn();
     commands.remove_resource::<InputDialog>();
 }
 

@@ -5,14 +5,14 @@ use std::ops::Add;
 
 use bevy::prelude::*;
 use bevy_ecs_tilemap::helpers::hex_grid::axial::AxialPos;
-use bevy_ecs_tilemap::helpers::hex_grid::neighbors::{HexNeighbors, HEX_DIRECTIONS};
+use bevy_ecs_tilemap::helpers::hex_grid::neighbors::{HEX_DIRECTIONS, HexNeighbors};
 use bevy_ecs_tilemap::prelude::*;
 use bevy_pancam::{DirectionKeys, PanCam};
 use bitvec::prelude::*;
 use derive_more::Display;
-use fastlem_random_terrain::{generate_terrain, Site2D, Terrain2D};
+use fastlem_random_terrain::{Site2D, Terrain2D, generate_terrain};
 use fastrand_contrib::RngExt as _;
-use itertools::{chain, repeat_n, Itertools as _};
+use itertools::{Itertools as _, chain, repeat_n};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use ordered_float::NotNan;
 use strum::VariantArray;
@@ -452,12 +452,8 @@ pub fn spawn_tilemap(
             texture: base_terrain_texture_vec,
             tile_size: TILE_SIZE,
             map_type: MAP_TYPE,
-            transform: get_tilemap_center_transform(
-                &map_size,
-                &GRID_SIZE,
-                &MAP_TYPE,
-                BaseTerrainLayer::Z_INDEX,
-            ),
+            anchor: TilemapAnchor::Center,
+            transform: Transform::from_xyz(0.0, 0.0, BaseTerrainLayer::Z_INDEX),
             ..Default::default()
         })
         .insert(BaseTerrainLayer);
@@ -506,12 +502,8 @@ pub fn spawn_tilemap(
             texture: river_texture_vec,
             tile_size: TILE_SIZE,
             map_type: MAP_TYPE,
-            transform: get_tilemap_center_transform(
-                &map_size,
-                &GRID_SIZE,
-                &MAP_TYPE,
-                RiverLayer::Z_INDEX,
-            ),
+            anchor: TilemapAnchor::Center,
+            transform: Transform::from_xyz(0.0, 0.0, RiverLayer::Z_INDEX),
             ..Default::default()
         })
         .insert(RiverLayer);
@@ -544,12 +536,8 @@ pub fn spawn_tilemap(
             texture: terrain_features_texture_vec,
             tile_size: TILE_SIZE,
             map_type: MAP_TYPE,
-            transform: get_tilemap_center_transform(
-                &map_size,
-                &GRID_SIZE,
-                &MAP_TYPE,
-                TerrainFeaturesLayer::Z_INDEX,
-            ),
+            anchor: TilemapAnchor::Center,
+            transform: Transform::from_xyz(0.0, 0.0, TerrainFeaturesLayer::Z_INDEX),
             ..Default::default()
         })
         .insert(TerrainFeaturesLayer);
@@ -573,12 +561,8 @@ pub fn spawn_tilemap(
             texture: unit_selection_texture_vec,
             tile_size: TILE_SIZE,
             map_type: MAP_TYPE,
-            transform: get_tilemap_center_transform(
-                &map_size,
-                &GRID_SIZE,
-                &MAP_TYPE,
-                UnitSelectionLayer::Z_INDEX,
-            ),
+            anchor: TilemapAnchor::Center,
+            transform: Transform::from_xyz(0.0, 0.0, UnitSelectionLayer::Z_INDEX),
             ..Default::default()
         })
         .insert(UnitSelectionLayer);
@@ -609,12 +593,8 @@ pub fn spawn_tilemap(
             texture: unit_state_texture_vec,
             tile_size: TILE_SIZE,
             map_type: MAP_TYPE,
-            transform: get_tilemap_center_transform(
-                &map_size,
-                &GRID_SIZE,
-                &MAP_TYPE,
-                UnitStateLayer::Z_INDEX,
-            ),
+            anchor: TilemapAnchor::Center,
+            transform: Transform::from_xyz(0.0, 0.0, UnitStateLayer::Z_INDEX),
             ..Default::default()
         })
         .insert(UnitStateLayer);
@@ -636,12 +616,8 @@ pub fn spawn_tilemap(
             texture: civilian_unit_texture_vec,
             tile_size: TILE_SIZE,
             map_type: MAP_TYPE,
-            transform: get_tilemap_center_transform(
-                &map_size,
-                &GRID_SIZE,
-                &MAP_TYPE,
-                CivilianUnitLayer::Z_INDEX,
-            ),
+            anchor: TilemapAnchor::Center,
+            transform: Transform::from_xyz(0.0, 0.0, CivilianUnitLayer::Z_INDEX),
             ..Default::default()
         })
         .insert(CivilianUnitLayer);
@@ -663,12 +639,8 @@ pub fn spawn_tilemap(
             texture: land_military_unit_texture_vec,
             tile_size: TILE_SIZE,
             map_type: MAP_TYPE,
-            transform: get_tilemap_center_transform(
-                &map_size,
-                &GRID_SIZE,
-                &MAP_TYPE,
-                LandMilitaryUnitLayer::Z_INDEX,
-            ),
+            anchor: TilemapAnchor::Center,
+            transform: Transform::from_xyz(0.0, 0.0, LandMilitaryUnitLayer::Z_INDEX),
             ..Default::default()
         })
         .insert(LandMilitaryUnitLayer);

@@ -8,7 +8,7 @@ use leafwing_input_manager::prelude::*;
 use crate::action::DebugAction;
 use crate::asset::FontHandle;
 use crate::game_setup::InGameSet;
-use crate::input::{update_cursor_tile_pos, CursorTilePos};
+use crate::input::{CursorTilePos, update_cursor_tile_pos};
 use crate::layer::BaseTerrainLayerFilter;
 
 const TILE_LABEL_Z_INDEX: f32 = 3.0;
@@ -44,10 +44,19 @@ impl Plugin for TileLabelPlugin {
 }
 
 /// Generates tile position labels.
+#[allow(clippy::type_complexity)]
 fn spawn_tile_labels(
     mut commands: Commands,
     base_terrain_tilemap_query: Single<
-        (&Transform, &TilemapType, &TilemapGridSize, &TileStorage),
+        (
+            &Transform,
+            &TilemapType,
+            &TilemapSize,
+            &TilemapAnchor,
+            &TilemapGridSize,
+            &TilemapTileSize,
+            &TileStorage,
+        ),
         BaseTerrainLayerFilter,
     >,
     base_terrain_tile_query: Query<(&mut TilePos,), BaseTerrainLayerFilter>,
@@ -63,12 +72,12 @@ fn spawn_tile_labels(
         justify: JustifyText::Center,
         ..Default::default()
     };
-    let (map_transform, map_type, grid_size, tilemap_storage) =
+    let (map_transform, map_type, map_size, map_anchor, grid_size, tile_size, tile_storage) =
         base_terrain_tilemap_query.into_inner();
-    for tile_entity in tilemap_storage.iter().flatten() {
+    for tile_entity in tile_storage.iter().flatten() {
         let (tile_pos,) = base_terrain_tile_query.get(*tile_entity).unwrap();
         let tile_center = tile_pos
-            .center_in_world(grid_size, map_type)
+            .center_in_world(map_size, grid_size, tile_size, map_type, map_anchor)
             .extend(TILE_LABEL_Z_INDEX);
         let transform = *map_transform * Transform::from_translation(tile_center);
 

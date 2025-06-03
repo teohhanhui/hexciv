@@ -63,7 +63,7 @@ pub fn init_our_player(
 ) {
     let Some((our_peer,)) = peer_query
         .iter()
-        .find(|(&peer,)| peer.peer_id == our_peer_id.0)
+        .find(|&(&peer,)| peer.peer_id == our_peer_id.0)
     else {
         commands.remove_resource::<OurPlayer>();
         return;

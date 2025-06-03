@@ -52,7 +52,7 @@ pub fn handle_turn_started(
         }
 
         if matches!(multiplayer_state.get(), MultiplayerState::Hosting) {
-            host_broadcast_events.send(turn_started.into());
+            host_broadcast_events.write(turn_started.into());
         }
     }
 
